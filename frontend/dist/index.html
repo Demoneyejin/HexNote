@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HexNote</title>
+    <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+    <!-- === Credentials Setup View (advanced — only shown when no bundled credentials) === -->
+    <div id="view-credentials" class="view hidden">
+        <div class="setup-card">
+            <h1 class="setup-title">HexNote</h1>
+            <h2>Connect to Google Drive</h2>
+            <p class="setup-desc">To use HexNote, you need to set up Google Drive API access. This is a one-time setup.</p>
+            <ol class="setup-steps">
+                <li>Go to <a href="#" id="link-gcp">Google Cloud Console</a></li>
+                <li>Create a new project (or select existing)</li>
+                <li>Enable the <strong>Google Drive API</strong></li>
+                <li>Go to <strong>Credentials</strong> &rarr; <strong>Create Credentials</strong> &rarr; <strong>OAuth client ID</strong></li>
+                <li>Application type: <strong>Desktop app</strong></li>
+                <li>Download the JSON file and paste its contents below</li>
+            </ol>
+            <textarea id="credentials-json" placeholder='Paste the contents of your credentials JSON file here...' rows="6"></textarea>
+            <button id="btn-save-credentials" class="btn-primary">Save &amp; Continue</button>
+            <p id="credentials-error" class="error-text hidden"></p>
+        </div>
+    </div>
+
+    <!-- === Sign In View === -->
+    <div id="view-signin" class="view hidden">
+        <div class="setup-card">
+            <h1 class="setup-title">HexNote</h1>
+            <h2>Sign in to Google</h2>
+            <p class="setup-desc">Click below to authenticate with your Google account. A browser window will open.</p>
+            <button id="btn-google-signin" class="btn-primary btn-large">Sign in with Google</button>
+            <p id="signin-waiting" class="status-text hidden">Waiting for authentication... Check your browser.</p>
+            <p id="signin-error" class="error-text hidden"></p>
+            <button id="btn-custom-credentials" class="btn-link btn-muted">Use your own API credentials</button>
+        </div>
+    </div>
+
+    <!-- === Path Choice View (Create vs Join) === -->
+    <div id="view-path-choice" class="view hidden">
+        <div class="setup-card setup-card-wide">
+            <div class="setup-top-bar">
+                <h1 class="setup-title">HexNote</h1>
+                <div class="setup-top-actions">
+                    <span class="user-badge" id="user-badge-pathchoice"></span>
+                    <button class="btn-signout-small btn-link" id="btn-signout-pathchoice">Sign Out</button>
+                </div>
+            </div>
+            <h2>How would you like to start?</h2>
+            <div class="path-choice-grid">
+                <button class="path-card" id="btn-path-create">
+                    <div class="path-card-icon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v10H3V7z"/><path d="M12 12v5M9.5 14.5h5"/></svg>
+                    </div>
+                    <h3>Create a workspace</h3>
+                    <p>Set up a new workspace backed by a Google Drive folder</p>
+                </button>
+                <button class="path-card" id="btn-path-join">
+                    <div class="path-card-icon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                    </div>
+                    <h3>Join a shared workspace</h3>
+                    <p>Open a workspace someone shared with you</p>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- === Join Shared Workspace View === -->
+    <div id="view-join" class="view hidden">
+        <div class="folder-picker-container">
+            <div class="setup-top-bar">
+                <h2>Join a Shared Workspace</h2>
+                <div class="setup-top-actions">
+                    <span class="user-badge" id="user-badge-join"></span>
+                    <button class="btn-signout-small btn-link" id="btn-signout-join">Sign Out</button>
+                </div>
+            </div>
+            <p class="setup-desc">Select a folder that was shared with you, or paste a Drive folder link.</p>
+            <div class="search-shared-container">
+                <input type="text" id="shared-search-input" placeholder="Search shared folders..." class="input-text" autocomplete="off">
+            </div>
+            <div id="shared-folder-list" class="folder-list"></div>
+            <div id="shared-folder-loading" class="folder-loading hidden">
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+            </div>
+            <div class="or-divider"><span>or</span></div>
+            <div class="paste-link-form">
+                <input type="text" id="paste-folder-link" placeholder="Paste a Google Drive folder link..." class="input-text" autocomplete="off">
+                <button id="btn-resolve-link" class="btn-secondary">Open</button>
+            </div>
+            <p id="paste-link-result" class="status-text hidden"></p>
+            <hr class="divider">
+            <div class="workspace-create-form">
+                <input type="text" id="join-workspace-name" placeholder="Workspace name (optional)" class="input-text">
+                <button id="btn-join-select" class="btn-primary" disabled>Use Selected Folder as Workspace</button>
+            </div>
+            <button id="btn-back-to-path-choice" class="btn-link">Back</button>
+        </div>
+    </div>
+
+    <!-- === Workspace Selector View === -->
+    <div id="view-workspaces" class="view hidden">
+        <div class="workspaces-container">
+            <div class="workspaces-header">
+                <div>
+                    <h1 class="setup-title">HexNote</h1>
+                    <p class="setup-desc" id="user-email-display"></p>
+                </div>
+                <div class="workspaces-header-actions">
+                    <span class="user-badge" id="user-badge-workspaces"></span>
+                    <button id="btn-add-workspace" class="btn-primary">+ New Workspace</button>
+                    <button id="btn-signout" class="btn-secondary btn-small">Sign Out</button>
+                </div>
+            </div>
+            <div id="workspace-grid" class="workspace-grid"></div>
+            <div id="no-workspaces" class="empty-state-small hidden">
+                <p>No workspaces yet. Create one to get started!</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- === Onboarding / Folder Picker View === -->
+    <div id="view-onboarding" class="view hidden">
+        <div class="folder-picker-container">
+            <h2>Choose a Google Drive Folder</h2>
+            <p class="setup-desc">Select an existing folder or create a new one. This folder will be your workspace root.</p>
+            <div id="folder-breadcrumb" class="breadcrumb">
+                <button class="breadcrumb-item" data-id="root">My Drive</button>
+            </div>
+            <div id="folder-list" class="folder-list"></div>
+            <div id="folder-loading" class="folder-loading hidden">
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+                <div class="skeleton-row"></div>
+            </div>
+            <div class="folder-actions">
+                <input type="text" id="new-folder-name" placeholder="New folder name" class="input-text">
+                <button id="btn-create-drive-folder" class="btn-secondary">Create Folder</button>
+            </div>
+            <hr class="divider">
+            <div class="workspace-create-form">
+                <input type="text" id="workspace-name" placeholder="Workspace name" class="input-text">
+                <button id="btn-select-folder" class="btn-primary">Use This Folder as Workspace</button>
+            </div>
+            <button id="btn-back-to-workspaces" class="btn-link">Back to Workspaces</button>
+        </div>
+    </div>
+
+    <!-- === Editor View (Phase 1 UI, now with workspace header) === -->
+    <div id="view-editor" class="view hidden">
+        <div id="app-layout" class="app-layout">
+            <!-- Sidebar -->
+            <aside id="sidebar">
+                <div class="sidebar-header">
+                    <div class="sidebar-title-row">
+                        <button id="btn-back-ws" class="btn-back" title="Back to Workspaces">&larr;</button>
+                        <h1 class="app-title" id="workspace-title">Workspace</h1>
+                    </div>
+                    <div class="sidebar-actions">
+                        <button id="btn-sync" class="btn-icon" title="Sync with Drive">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8a6 6 0 0110.89-3.48M14 8a6 6 0 01-10.89 3.48" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M14 2v4h-4M2 14v-4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                        <button id="btn-share" class="btn-icon" title="Share Workspace">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="4" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 7l4-2M6 9l4 2" stroke="currentColor" stroke-width="1.5"/></svg>
+                        </button>
+                        <button id="btn-settings" class="btn-icon" title="Settings">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.93 2.93l1.41 1.41M11.66 11.66l1.41 1.41M2.93 13.07l1.41-1.41M11.66 4.34l1.41-1.41" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                        </button>
+                        <div class="sidebar-actions-sep"></div>
+                        <button id="btn-new-page" class="btn-icon" title="New Page">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                        </button>
+                        <button id="btn-new-folder" class="btn-icon" title="New Folder">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h4l2 2h6v7H2V4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="none"/><path d="M8 8v4M6 10h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="search-container">
+                    <input type="text" id="search-input" placeholder="Search pages..." autocomplete="off">
+                    <div id="search-results" class="search-results hidden"></div>
+                </div>
+
+                <div id="page-tree" class="page-tree"></div>
+                <div id="sync-status-bar" class="sync-status-bar">
+                    <span id="sync-status-text">Ready</span>
+                </div>
+            </aside>
+
+            <!-- Main content -->
+            <main id="main-content">
+                <div id="empty-state" class="empty-state">
+                    <div class="empty-state-icon">
+                        <svg width="64" height="64" viewBox="0 0 64 64" fill="none"><rect x="12" y="8" width="40" height="48" rx="4" stroke="currentColor" stroke-width="2"/><path d="M22 22h20M22 30h20M22 38h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                    </div>
+                    <h2>Start Writing</h2>
+                    <p>Create a new page or folder to get started.</p>
+                    <button id="btn-create-first" class="btn-primary">Create First Page</button>
+                </div>
+
+                <div id="editor-container" class="editor-container hidden">
+                    <div class="editor-header">
+                        <input type="text" id="doc-title" class="doc-title" placeholder="Untitled">
+                        <div class="editor-meta">
+                            <span id="save-status" class="save-status">Saved</span>
+                            <button id="btn-publish" class="btn-primary btn-small" title="Publish to Drive" style="display:none;">Publish</button>
+                            <button id="btn-history" class="btn-icon" title="Version History">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </button>
+                            <button id="btn-delete-doc" class="btn-icon btn-danger" title="Delete">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4h10M6 4V3h4v1M5 4v8.5a.5.5 0 00.5.5h5a.5.5 0 00.5-.5V4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="editor"></div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- === Sharing Modal === -->
+    <div id="sharing-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Share Workspace</h3>
+                <button id="btn-close-sharing" class="btn-icon">&times;</button>
+            </div>
+            <div class="share-form">
+                <input type="email" id="share-email" placeholder="Email address" class="input-text">
+                <select id="share-role" class="input-select">
+                    <option value="reader">Viewer</option>
+                    <option value="writer">Editor</option>
+                </select>
+                <button id="btn-share-invite" class="btn-primary">Invite</button>
+            </div>
+            <div id="member-list" class="member-list"></div>
+        </div>
+    </div>
+
+    <!-- === Version History Modal === -->
+    <div id="history-modal" class="modal-overlay hidden">
+        <div class="modal-content modal-wide">
+            <div class="modal-header">
+                <h3>Version History</h3>
+                <button id="btn-close-history" class="btn-icon">&times;</button>
+            </div>
+            <div class="history-layout">
+                <div id="history-list" class="history-list">
+                    <p class="history-empty">Loading...</p>
+                </div>
+                <div id="history-preview" class="history-preview hidden">
+                    <div class="history-preview-header">
+                        <span id="history-preview-date"></span>
+                        <button id="btn-restore-version" class="btn-primary btn-small">Restore this version</button>
+                    </div>
+                    <pre id="history-preview-content" class="history-preview-body"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- === Settings Modal === -->
+    <div id="settings-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Settings</h3>
+                <button id="btn-close-settings" class="btn-icon">&times;</button>
+            </div>
+            <div class="settings-form">
+                <div class="settings-group">
+                    <label for="setting-theme">Theme</label>
+                    <select id="setting-theme" class="input-select">
+                        <option value="system">System Default</option>
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                    </select>
+                </div>
+                <div class="settings-group">
+                    <label for="setting-autosave">Auto-save Delay (seconds)</label>
+                    <input type="number" id="setting-autosave" class="input-text" min="1" max="30" step="1">
+                </div>
+                <hr class="divider">
+                <div class="settings-group">
+                    <label>Data</label>
+                    <button id="btn-export-workspace" class="btn-secondary">Export Workspace to Folder</button>
+                    <p class="settings-hint">Exports all pages as .md files with YAML frontmatter, preserving the folder hierarchy.</p>
+                </div>
+                <div class="settings-actions">
+                    <button id="btn-save-settings" class="btn-primary">Save Settings</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Context menu -->
+    <div id="context-menu" class="context-menu hidden">
+        <button data-action="new-page">New Page</button>
+        <button data-action="new-folder">New Folder</button>
+        <hr>
+        <button data-action="rename">Rename</button>
+        <button data-action="delete" class="danger">Delete</button>
+    </div>
+
+    <!-- Workspace context menu -->
+    <div id="ws-context-menu" class="context-menu hidden">
+        <button data-action="ws-open">Open</button>
+        <button data-action="ws-rename">Rename</button>
+        <button data-action="ws-permissions">Permissions</button>
+        <hr>
+        <button data-action="ws-delete" class="danger">Delete Workspace</button>
+        <button data-action="ws-new">New Workspace</button>
+    </div>
+
+    <!-- Toast notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="/vendor/tiptap-bundle.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>

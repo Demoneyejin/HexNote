@@ -1,0 +1,11 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "HexNote",
+  "outputfilename": "hexnote",
+  "frontend:dir": "frontend",
+  "wailsjsdir": "frontend/dist",
+  "author": {
+    "name": "Alex Batista",
+    "email": "alex.batista0@gmail.com"
+  }
+}
