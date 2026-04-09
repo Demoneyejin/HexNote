@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HexNote — Free, Open-Source Confluence Alternative</title>
+    <meta name="description" content="HexNote is a free, open-source alternative to Confluence. Markdown files on your own Google Drive. You own your data.">
+    <meta name="keywords" content="confluence alternative, free confluence, open source wiki, google drive wiki, markdown wiki, atlassian alternative">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+            line-height: 1.6;
+            color: #1f2937;
+            background: #f9fafb;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 60px 24px;
+        }
+        header {
+            text-align: center;
+            margin-bottom: 48px;
+        }
+        h1 {
+            font-size: 56px;
+            font-weight: 800;
+            color: #2563eb;
+            margin-bottom: 12px;
+            letter-spacing: -1px;
+        }
+        .tagline {
+            font-size: 20px;
+            color: #4b5563;
+            font-weight: 500;
+        }
+        .card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 32px;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        }
+        h2 {
+            font-size: 24px;
+            margin-bottom: 16px;
+            color: #111827;
+        }
+        h3 {
+            font-size: 18px;
+            margin: 20px 0 8px;
+            color: #111827;
+        }
+        p {
+            margin-bottom: 12px;
+            color: #374151;
+        }
+        ul {
+            padding-left: 24px;
+            margin-bottom: 16px;
+        }
+        li {
+            margin-bottom: 6px;
+            color: #374151;
+        }
+        a {
+            color: #2563eb;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .buttons {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #2563eb;
+            color: white;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: background 0.15s;
+        }
+        .btn:hover {
+            background: #1d4ed8;
+            text-decoration: none;
+        }
+        .btn-secondary {
+            background: white;
+            color: #2563eb;
+            border: 1px solid #2563eb;
+        }
+        .btn-secondary:hover {
+            background: #eff6ff;
+        }
+        footer {
+            text-align: center;
+            margin-top: 48px;
+            padding: 24px;
+            color: #6b7280;
+            font-size: 14px;
+        }
+        .footer-links {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+        code {
+            background: #f3f4f6;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>HexNote</h1>
+            <p class="tagline">A free, open-source alternative to Confluence</p>
+        </header>
+
+        <div class="card">
+            <h2>What is HexNote?</h2>
+            <p>HexNote is a free desktop wiki that stores your documents as markdown files on <strong>your own Google Drive</strong>. You own your data forever. No subscriptions, no vendor lock-in, no surprise deletions.</p>
+            <p><strong>If Atlassian can delete your entire workspace for not logging in within a certain amount of time, you don't own your data. HexNote fixes that.</strong></p>
+            <div class="buttons">
+                <a href="https://github.com/Demoneyejin/HexNote" class="btn">View on GitHub</a>
+                <a href="https://github.com/Demoneyejin/HexNote/releases" class="btn btn-secondary">Download</a>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Features</h2>
+            <ul>
+                <li><strong>Rich text editor</strong> — headings, bold, italic, code blocks, tables, task lists, images</li>
+                <li><strong>Google Drive storage</strong> — your docs are <code>.md</code> files on YOUR Drive</li>
+                <li><strong>Publish/Draft workflow</strong> — edit locally, publish when ready</li>
+                <li><strong>Workspace sharing</strong> — share a Drive folder, everyone sees published pages</li>
+                <li><strong>Image support</strong> — paste or drag images, stored on Drive</li>
+                <li><strong>Version history</strong> — every publish creates a Drive revision you can restore</li>
+                <li><strong>Full-text search</strong> — instant search across all your pages</li>
+                <li><strong>Dark mode</strong> — because of course</li>
+                <li><strong>Offline capable</strong> — local cache works without internet</li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>How It Works</h2>
+            <p>1. Sign in with your Google account</p>
+            <p>2. Pick a Google Drive folder to use as your workspace</p>
+            <p>3. Write and edit documents locally (they stay as drafts)</p>
+            <p>4. Click <strong>Publish</strong> to push to Drive as markdown files</p>
+            <p>5. Collaborators join the workspace and see published pages</p>
+        </div>
+
+        <footer>
+            <div class="footer-links">
+                <a href="privacy.html">Privacy Policy</a>
+                <a href="terms.html">Terms of Service</a>
+                <a href="https://github.com/Demoneyejin/HexNote">GitHub</a>
+                <a href="https://github.com/Demoneyejin/HexNote/issues">Report Issue</a>
+            </div>
+            <p>© 2026 Alex Batista. MIT Licensed. Built out of pure spite.</p>
+        </footer>
+    </div>
+</body>
+</html>
