@@ -21,15 +21,6 @@ import (
 	"google.golang.org/api/drive/v3"
 )
 
-// bundledClientID and bundledClientSecret are the default OAuth credentials
-// shipped with the binary. These are injected at build time via -ldflags so
-// they never appear in source code. In dev builds without injection, they
-// remain as placeholders and the user must provide their own credentials.json.
-var (
-	bundledClientID     = "PLACEHOLDER_CLIENT_ID"
-	bundledClientSecret = "PLACEHOLDER_CLIENT_SECRET"
-)
-
 // AuthManager handles OAuth2 authentication with Google
 type AuthManager struct {
 	appDataDir string
@@ -47,11 +38,6 @@ type credentialsJSON struct {
 	} `json:"installed"`
 }
 
-// hasBundledCredentials returns true if real OAuth credentials are compiled into the binary.
-func hasBundledCredentials() bool {
-	return bundledClientID != "" && bundledClientID != "PLACEHOLDER_CLIENT_ID"
-}
-
 func NewAuthManager(appDataDir string) *AuthManager {
 	return &AuthManager{appDataDir: appDataDir}
 }
@@ -60,9 +46,9 @@ func (am *AuthManager) SetWailsContext(ctx context.Context) {
 	am.wailsCtx = ctx
 }
 
-// LoadCredentials configures OAuth2. Priority: user-provided credentials.json, then bundled defaults.
+// LoadCredentials loads the user-provided OAuth2 credentials from disk.
+// Users must provide their own Google Cloud credentials (bring-your-own-key model).
 func (am *AuthManager) LoadCredentials() error {
-	// 1. Try user-provided credentials file
 	if data, err := os.ReadFile(am.credentialsPath()); err == nil {
 		var creds credentialsJSON
 		if err := json.Unmarshal(data, &creds); err == nil && creds.Installed.ClientID != "" {
@@ -75,18 +61,6 @@ func (am *AuthManager) LoadCredentials() error {
 			am.loadToken()
 			return nil
 		}
-	}
-
-	// 2. Fall back to bundled credentials compiled into the binary
-	if hasBundledCredentials() {
-		am.config = &oauth2.Config{
-			ClientID:     bundledClientID,
-			ClientSecret: bundledClientSecret,
-			Scopes:       []string{drive.DriveScope},
-			Endpoint:     google.Endpoint,
-		}
-		am.loadToken()
-		return nil
 	}
 
 	// Neither user-provided nor bundled credentials available

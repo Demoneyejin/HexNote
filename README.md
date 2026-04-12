@@ -27,21 +27,11 @@ HexNote is a **free desktop wiki/knowledge base** that replaces Confluence, Noti
 
 ---
 
-## Quick Start (Using the Pre-built App)
+## Quick Start
 
-1. Download `hexnote.exe` from [Releases](../../releases)
-2. Launch it
-3. Sign in with your Google account
-4. Create a workspace (picks a Google Drive folder)
-5. Start writing
+HexNote uses a **bring-your-own-key** model — you create free Google Cloud credentials and the app connects directly to your own Google Drive. No middleman, no third-party servers, no one else has access to your data.
 
-That's it. Your docs are on your Drive.
-
----
-
-## DIY Setup (Bring Your Own Google Cloud Credentials)
-
-Don't want to wait for our GCP verification? Set up your own OAuth credentials in 5 minutes. It's free.
+The setup takes about 5 minutes and only needs to be done once. It's completely free.
 
 ### Step 1: Create a Google Cloud Project
 
@@ -71,15 +61,16 @@ Don't want to wait for our GCP verification? Set up your own OAuth credentials i
    - Click **Create**
 5. **Download the JSON** file (click the download icon)
 
-### Step 4: Load Credentials in HexNote
+### Step 4: Launch HexNote
 
-1. Launch HexNote
-2. Click **"Use your own API credentials"** on the sign-in screen
-3. Paste the contents of the downloaded JSON file
-4. Click **Save & Continue**
-5. Sign in with your Google account
+1. Download `hexnote.exe` from [Releases](../../releases) (or build from source)
+2. Launch it — you'll see the setup screen
+3. Click **"Show me how"** if you need a reminder of the steps
+4. Paste the contents of your downloaded JSON file
+5. Click **Save & Continue**
+6. Sign in with your Google account
 
-### Step 5: Add Test Users (Optional)
+### Step 5: Add Test Users
 
 Your GCP project starts in "Testing" mode, which means only users you explicitly add can sign in. To add users:
 

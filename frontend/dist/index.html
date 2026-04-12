@@ -7,21 +7,26 @@
     <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
-    <!-- === Credentials Setup View (advanced — only shown when no bundled credentials) === -->
+    <!-- === Credentials Setup View (primary — users bring their own GCP credentials) === -->
     <div id="view-credentials" class="view hidden">
         <div class="setup-card">
             <h1 class="setup-title">HexNote</h1>
-            <h2>Connect to Google Drive</h2>
-            <p class="setup-desc">To use HexNote, you need to set up Google Drive API access. This is a one-time setup.</p>
-            <ol class="setup-steps">
-                <li>Go to <a href="#" id="link-gcp">Google Cloud Console</a></li>
-                <li>Create a new project (or select existing)</li>
-                <li>Enable the <strong>Google Drive API</strong></li>
-                <li>Go to <strong>Credentials</strong> &rarr; <strong>Create Credentials</strong> &rarr; <strong>OAuth client ID</strong></li>
-                <li>Application type: <strong>Desktop app</strong></li>
-                <li>Download the JSON file and paste its contents below</li>
-            </ol>
-            <textarea id="credentials-json" placeholder='Paste the contents of your credentials JSON file here...' rows="6"></textarea>
+            <h2>Welcome! One-time Setup</h2>
+            <p class="setup-desc">HexNote stores your docs on <strong>your own Google Drive</strong>. To get started, you'll need free Google Cloud credentials. This takes about 5 minutes and only needs to be done once.</p>
+            <details class="setup-guide">
+                <summary class="setup-guide-toggle">Show me how (5-minute setup guide)</summary>
+                <ol class="setup-steps">
+                    <li>Go to <a href="#" id="link-gcp">Google Cloud Console</a> and create a new project</li>
+                    <li>Go to <strong>APIs &amp; Services</strong> &rarr; <strong>Library</strong> &rarr; search <strong>Google Drive API</strong> &rarr; <strong>Enable</strong></li>
+                    <li>Go to <strong>APIs &amp; Services</strong> &rarr; <strong>Credentials</strong> &rarr; <strong>+ Create Credentials</strong> &rarr; <strong>OAuth client ID</strong></li>
+                    <li>If prompted, configure the <strong>OAuth consent screen</strong> (External, fill in your email, skip the rest)</li>
+                    <li>Application type: <strong>Desktop app</strong> &rarr; <strong>Create</strong></li>
+                    <li>Click the <strong>download icon</strong> to get the JSON file</li>
+                    <li>Open the JSON file, copy its contents, and paste below</li>
+                </ol>
+                <p class="setup-note">This is 100% free. Google Drive API has no usage charges at any scale. Your credentials belong to you — HexNote never sees them.</p>
+            </details>
+            <textarea id="credentials-json" placeholder='Paste the contents of your downloaded credentials JSON file here...' rows="6"></textarea>
             <button id="btn-save-credentials" class="btn-primary">Save &amp; Continue</button>
             <p id="credentials-error" class="error-text hidden"></p>
         </div>
@@ -36,7 +41,7 @@
             <button id="btn-google-signin" class="btn-primary btn-large">Sign in with Google</button>
             <p id="signin-waiting" class="status-text hidden">Waiting for authentication... Check your browser.</p>
             <p id="signin-error" class="error-text hidden"></p>
-            <button id="btn-custom-credentials" class="btn-link btn-muted">Use your own API credentials</button>
+            <button id="btn-custom-credentials" class="btn-link btn-muted">Change API credentials</button>
         </div>
     </div>
 
