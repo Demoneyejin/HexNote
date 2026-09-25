@@ -65,6 +65,12 @@ type AuthStatus struct {
 	// Offline is set when the sign-in could not be checked because Google
 	// was unreachable; the user stays signed in.
 	Offline bool `json:"offline,omitempty"`
+	// Mode is "solo" (HexNote's own sign-in, drive.file scope), "team" (the
+	// user's own Google Cloud client, full drive scope) or "" (none yet).
+	Mode string `json:"mode,omitempty"`
+	// BundledAvailable is set when this build carries HexNote's own OAuth
+	// client, so Solo mode can be offered.
+	BundledAvailable bool `json:"bundledAvailable,omitempty"`
 }
 
 // SyncSummary reports what one refresh from Drive changed on this PC.

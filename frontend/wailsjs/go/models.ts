@@ -6,6 +6,8 @@ export namespace models {
 	    userEmail?: string;
 	    sessionExpired?: boolean;
 	    offline?: boolean;
+	    mode?: string;
+	    bundledAvailable?: boolean;
 	}
 
 	export interface Document {

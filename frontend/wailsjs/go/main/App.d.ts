@@ -8,6 +8,8 @@ export function CreateDriveFolder(arg1:string,arg2:string):Promise<models.DriveF
 
 export function CreateLabel(arg1:string,arg2:string):Promise<models.Label>;
 
+export function CreateSoloWorkspace(arg1:string):Promise<models.Workspace>;
+
 export function CreateWorkspace(arg1:string,arg2:string):Promise<models.Workspace>;
 
 export function DeleteDocument(arg1:string):Promise<void>;
@@ -97,3 +99,5 @@ export function UpdateDocument(arg1:string,arg2:string,arg3:string):Promise<mode
 export function UpdateSettings(arg1:number,arg2:string,arg3:number):Promise<models.Settings>;
 
 export function UploadImage(arg1:string,arg2:string):Promise<string>;
+
+export function UseBundledCredentials():Promise<void>;

@@ -1068,3 +1068,34 @@ func TestRestoreOfUpToDatePageNeedsNoBackup(t *testing.T) {
 		t.Error("v2 should be recoverable from version history")
 	}
 }
+
+// === Phase 5: Solo mode ===
+
+func TestCreateSoloWorkspaceMakesFolderInMyDrive(t *testing.T) {
+	ta := newTestApp(t)
+	ws, err := ta.CreateSoloWorkspace("  Game Jam  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := ta.fake.Get(ws.DriveFolderID)
+	if f == nil || f.Name != "Game Jam" || f.MimeType != drivefake.FolderMime || len(f.Parents) != 1 || f.Parents[0] != "root" {
+		t.Fatalf("Drive folder = %+v", f)
+	}
+	if ws.Name != "Game Jam" || !ws.IsActive {
+		t.Errorf("workspace = %+v", ws)
+	}
+	if _, err := ta.CreateSoloWorkspace(" "); err == nil || !strings.HasPrefix(err.Error(), "ERR_INVALID:") {
+		t.Errorf("empty name = %v", err)
+	}
+}
+
+func TestUseBundledCredentialsWithoutBundledClient(t *testing.T) {
+	ta := newTestApp(t)
+	if err := ta.UseBundledCredentials(); err == nil || !strings.HasPrefix(err.Error(), "ERR_INVALID:") {
+		t.Errorf("want ERR_INVALID without a bundled client, got %v", err)
+	}
+	st, _ := ta.GetAuthStatus()
+	if st.BundledAvailable {
+		t.Error("BundledAvailable should be false in a plain build")
+	}
+}

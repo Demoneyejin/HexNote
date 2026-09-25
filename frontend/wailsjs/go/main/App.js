@@ -14,6 +14,10 @@ export function CreateLabel(arg1, arg2) {
   return window['go']['main']['App']['CreateLabel'](arg1, arg2);
 }
 
+export function CreateSoloWorkspace(arg1) {
+  return window['go']['main']['App']['CreateSoloWorkspace'](arg1);
+}
+
 export function CreateWorkspace(arg1, arg2) {
   return window['go']['main']['App']['CreateWorkspace'](arg1, arg2);
 }
@@ -192,4 +196,8 @@ export function UpdateSettings(arg1, arg2, arg3) {
 
 export function UploadImage(arg1, arg2) {
   return window['go']['main']['App']['UploadImage'](arg1, arg2);
+}
+
+export function UseBundledCredentials() {
+  return window['go']['main']['App']['UseBundledCredentials']();
 }

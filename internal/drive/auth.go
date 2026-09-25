@@ -21,10 +21,40 @@ import (
 	"google.golang.org/api/drive/v3"
 )
 
+// Bundled OAuth client, injected at build time by build.sh / build.bat:
+//
+//	-X hexnote/internal/drive.bundledClientID=... -X hexnote/internal/drive.bundledClientSecret=...
+//
+// Never commit real values. When they are empty (a plain `wails build`), only
+// the bring-your-own-key Team mode exists, exactly as before.
+var (
+	bundledClientID     string
+	bundledClientSecret string
+)
+
+// Sign-in modes.
+const (
+	// ModeSolo signs in with the bundled, Google-verified HexNote client and
+	// the drive.file scope: HexNote only sees files it created (or the user
+	// opened with it). No Cloud project needed; no shared folders.
+	ModeSolo = "solo"
+	// ModeTeam signs in with the user's own OAuth client (pasted JSON) and
+	// the full drive scope, which shared workspaces need.
+	ModeTeam = "team"
+)
+
+// scopeKeys are written to token_scope with each token, so a token obtained
+// for one mode is discarded when the app runs in another.
+var scopeKeys = map[string]string{
+	ModeTeam: "drive", // unchanged from before modes existed: existing tokens stay valid
+	ModeSolo: "drive.file",
+}
+
 // AuthManager handles OAuth2 authentication with Google
 type AuthManager struct {
 	appDataDir string
 	config     *oauth2.Config
+	mode       string // ModeSolo, ModeTeam, or "" when no credentials are available
 	token      *oauth2.Token
 	wailsCtx   context.Context
 }
@@ -46,9 +76,26 @@ func (am *AuthManager) SetWailsContext(ctx context.Context) {
 	am.wailsCtx = ctx
 }
 
-// LoadCredentials loads the user-provided OAuth2 credentials from disk.
-// Users must provide their own Google Cloud credentials (bring-your-own-key model).
+// BundledClientAvailable reports whether this build carries a HexNote OAuth
+// client (Solo mode is possible).
+func BundledClientAvailable() bool {
+	return bundledClientID != ""
+}
+
+// LoadCredentials picks the OAuth client and mode:
+//   - Team mode when the user pasted their own client (oauth_credentials.json),
+//     with the full drive scope;
+//   - otherwise Solo mode with the bundled client, if this build has one,
+//     with the drive.file scope;
+//   - otherwise no credentials (the user must paste a client JSON).
+//
+// The mode is recorded in auth_mode, and a saved token is only used if it
+// was obtained for the same mode's scope.
 func (am *AuthManager) LoadCredentials() error {
+	am.config = nil
+	am.mode = ""
+	am.token = nil
+
 	if data, err := os.ReadFile(am.credentialsPath()); err == nil {
 		var creds credentialsJSON
 		if err := json.Unmarshal(data, &creds); err == nil && creds.Installed.ClientID != "" {
@@ -58,13 +105,49 @@ func (am *AuthManager) LoadCredentials() error {
 				Scopes:       []string{drive.DriveScope},
 				Endpoint:     google.Endpoint,
 			}
+			am.setMode(ModeTeam)
 			am.loadToken()
 			return nil
 		}
 	}
 
-	// Neither user-provided nor bundled credentials available
+	if BundledClientAvailable() {
+		am.config = &oauth2.Config{
+			ClientID:     bundledClientID,
+			ClientSecret: bundledClientSecret,
+			Scopes:       []string{drive.DriveFileScope},
+			Endpoint:     google.Endpoint,
+		}
+		am.setMode(ModeSolo)
+		am.loadToken()
+		return nil
+	}
+
 	return fmt.Errorf("no credentials available")
+}
+
+// Mode returns the current sign-in mode (ModeSolo, ModeTeam or "").
+func (am *AuthManager) Mode() string {
+	return am.mode
+}
+
+func (am *AuthManager) setMode(mode string) {
+	am.mode = mode
+	os.MkdirAll(am.appDataDir, 0700)
+	os.WriteFile(am.modePath(), []byte(mode), 0600)
+}
+
+// ClearCredentials forgets the pasted Team-mode client (and its sign-in).
+// With a bundled client the app falls back to Solo mode; without one the
+// user is asked for credentials again.
+func (am *AuthManager) ClearCredentials() error {
+	am.SignOut()
+	safeRemoveInDir(am.appDataDir, am.credentialsPath())
+	safeRemoveInDir(am.appDataDir, am.modePath())
+	if err := am.LoadCredentials(); err != nil && BundledClientAvailable() {
+		return err
+	}
+	return nil
 }
 
 // SaveCredentials writes credentials JSON content to the app data dir
@@ -248,15 +331,21 @@ func safeRemoveInDir(root, path string) {
 
 // Token persistence
 
-// currentScopeKey is written alongside the token so we can detect scope changes
-// across app updates and automatically invalidate stale tokens.
-const currentScopeKey = "drive" // matches drive.DriveScope
+// currentScopeKey is written alongside the token so we can detect scope
+// changes (an app update, or switching between Solo and Team mode) and
+// invalidate tokens obtained for another scope.
+func (am *AuthManager) currentScopeKey() string {
+	if key, ok := scopeKeys[am.mode]; ok {
+		return key
+	}
+	return scopeKeys[ModeTeam]
+}
 
 func (am *AuthManager) loadToken() {
 	// Check if the token was obtained with the current scope
 	scopeData, _ := os.ReadFile(am.scopePath())
 	savedScope := strings.TrimSpace(string(scopeData))
-	if savedScope != "" && savedScope != currentScopeKey {
+	if savedScope != "" && savedScope != am.currentScopeKey() {
 		// Scope changed since last auth — token is stale, force re-auth
 		safeRemoveInDir(am.appDataDir, am.tokenPath())
 		safeRemoveInDir(am.appDataDir, am.scopePath())
@@ -283,7 +372,11 @@ func (am *AuthManager) saveToken() error {
 		return err
 	}
 	// Record which scope this token was obtained with
-	return os.WriteFile(am.scopePath(), []byte(currentScopeKey), 0600)
+	return os.WriteFile(am.scopePath(), []byte(am.currentScopeKey()), 0600)
+}
+
+func (am *AuthManager) modePath() string {
+	return filepath.Join(am.appDataDir, "auth_mode")
 }
 
 func (am *AuthManager) credentialsPath() string {
