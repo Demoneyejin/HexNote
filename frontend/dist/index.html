@@ -186,7 +186,7 @@
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.93 2.93l1.41 1.41M11.66 11.66l1.41 1.41M2.93 13.07l1.41-1.41M11.66 4.34l1.41-1.41" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                         </button>
                         <div class="sidebar-actions-sep"></div>
-                        <button id="btn-new-page" class="btn-icon" title="New Page">
+                        <button id="btn-new-page" class="btn-icon" title="New page (Ctrl+N)" aria-label="New page" aria-keyshortcuts="Control+N">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                         </button>
                         <button id="btn-new-folder" class="btn-icon" title="New Folder">
@@ -196,7 +196,7 @@
                 </div>
 
                 <div class="search-container">
-                    <input type="text" id="search-input" placeholder="Search pages..." autocomplete="off">
+                    <input type="text" id="search-input" placeholder="Search pages (Ctrl+K)" aria-label="Search pages" aria-keyshortcuts="Control+K" autocomplete="off">
                     <div id="search-results" class="search-results hidden"></div>
                 </div>
 
@@ -369,6 +369,10 @@
         <div class="modal-content confirm-content">
             <h3 id="confirm-title"></h3>
             <p id="confirm-body"></p>
+            <div id="confirm-field" class="confirm-field hidden">
+                <label id="confirm-input-label" for="confirm-input"></label>
+                <input id="confirm-input" type="text" class="input-text" autocomplete="off" spellcheck="false">
+            </div>
             <div id="confirm-actions" class="confirm-actions"></div>
         </div>
     </div>

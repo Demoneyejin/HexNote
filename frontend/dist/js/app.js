@@ -14,6 +14,7 @@
     var activeWorkspace = null;
     var autoSaveDelay = 2000;
     var selectedRevisionId = null;
+    var refreshToolbar = function () {}; // set by buildEditorToolbar
     var lastKnownContent = '';  // serializer output for the last content loaded/saved — prevents auto-save from re-dirtying unchanged docs
     var lastKnownTitle = '';    // title as last loaded/saved — a title-only edit must still reach the backend
     var currentDocMeta = null;  // { status, driveFileId } of the open page, for the status line
@@ -149,6 +150,15 @@
         }
     }
 
+    // === Keyboard shortcuts ===
+    var isMac = /Mac|iPhone|iPad/.test(navigator.platform || '');
+
+    // shortcutLabel turns 'Mod+Shift+P' into 'Ctrl+Shift+P' (or ⌘⇧P on a Mac).
+    function shortcutLabel(keys) {
+        if (!isMac) return keys.replace('Mod', 'Ctrl');
+        return keys.replace('Mod+', '\u2318').replace('Shift+', '\u21E7').replace('Alt+', '\u2325');
+    }
+
     // === Confirmation sheet ===
     // askChoice shows an in-app sheet and resolves with the chosen value, or
     // null when dismissed (Esc, Cancel, or a click on the backdrop).
@@ -166,6 +176,16 @@
         document.getElementById('confirm-title').textContent = opts.title || '';
         document.getElementById('confirm-body').textContent = opts.body || '';
         actions.innerHTML = '';
+
+        // Optional single-line text field (askText).
+        var field = document.getElementById('confirm-field');
+        var input = document.getElementById('confirm-input');
+        field.classList.toggle('hidden', !opts.input);
+        if (opts.input) {
+            document.getElementById('confirm-input-label').textContent = opts.input.label || '';
+            input.value = opts.input.value || '';
+            input.placeholder = opts.input.placeholder || '';
+        }
 
         var cancel = document.createElement('button');
         cancel.id = 'confirm-cancel';
@@ -186,7 +206,7 @@
 
         sheetReturnFocus = document.activeElement;
         sheet.classList.remove('hidden');
-        cancel.focus();
+        if (opts.input) { input.focus(); input.select(); } else cancel.focus();
         return new Promise(function (resolve) { sheetResolve = resolve; });
     }
 
@@ -213,8 +233,23 @@
         return v === 'ok';
     }
 
+    // askText shows the sheet with a text field. Resolves with
+    // { choice, text } or null when dismissed. Enter in the field picks
+    // the first 'primary' choice.
+    async function askText(opts) {
+        var choice = await askChoice(Object.assign({}, opts, { input: { label: opts.label, value: opts.value, placeholder: opts.placeholder } }));
+        if (choice === null) return null;
+        return { choice: choice, text: document.getElementById('confirm-input').value };
+    }
+
     function bindSheetEvents() {
         var sheet = document.getElementById('confirm-sheet');
+        document.getElementById('confirm-input').addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            var primary = document.querySelector('#confirm-actions .btn-primary');
+            if (primary) primary.click();
+        });
         sheet.addEventListener('mousedown', function (e) {
             if (e.target === sheet) closeSheet(null);
         });
@@ -975,6 +1010,51 @@
 
         // Build the toolbar for TipTap (it doesn't include one by default)
         buildEditorToolbar();
+
+        // Links open in the browser with Ctrl+click (plain clicks edit text).
+        document.getElementById('editor').addEventListener('click', function (e) {
+            var a = e.target.closest('a[href]');
+            if (!a || !(e.ctrlKey || e.metaKey)) return;
+            e.preventDefault();
+            var url = normalizeUrl(a.getAttribute('href'));
+            if (url && window.runtime) window.runtime.BrowserOpenURL(url);
+        });
+    }
+
+    // normalizeUrl accepts web and mail links only; a bare domain gets https://.
+    function normalizeUrl(raw) {
+        var url = (raw || '').trim();
+        if (!url) return '';
+        if (/^mailto:/i.test(url)) return url;
+        if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = 'https://' + url.replace(/^\/+/, '');
+        return /^https?:\/\/[^\s]+$/i.test(url) ? url : '';
+    }
+
+    // editLink adds, changes or removes the link on the selection.
+    async function editLink() {
+        if (!editor) return;
+        var prev = editor.getAttributes('link').href || '';
+        var choices = [];
+        if (prev) choices.push({ id: 'link-remove', label: 'Remove link', value: 'remove', kind: 'secondary' });
+        choices.push({ id: 'link-ok', label: prev ? 'Update link' : 'Add link', value: 'ok', kind: 'primary' });
+        var res = await askText({
+            title: prev ? 'Edit link' : 'Add link',
+            body: '',
+            label: 'Web address',
+            value: prev,
+            placeholder: 'https://example.com',
+            choices: choices,
+        });
+        if (!res) return;
+        var chain = editor.chain().focus().extendMarkRange('link');
+        if (res.choice === 'remove') { chain.unsetLink().run(); return; }
+        var url = normalizeUrl(res.text);
+        if (!url) { showToast('Enter a web address such as https://example.com', 'warning'); return; }
+        if (editor.state.selection.empty && !prev) {
+            editor.chain().focus().insertContent({ type: 'text', text: url, marks: [{ type: 'link', attrs: { href: url } }] }).run();
+        } else {
+            chain.setLink({ href: url }).run();
+        }
     }
 
     async function uploadAndInsertImage(file) {
@@ -1013,31 +1093,42 @@
         var toolbar = document.createElement('div');
         toolbar.className = 'editor-toolbar';
 
+        var ICON_LINK = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 014 4l-1 1M9 11.5l-1 1a2.8 2.8 0 01-4-4l1-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+        var ICON_UNDO = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5 3L2 6l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 6H10a4 4 0 010 8H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+        var ICON_REDO = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M11 3l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.5 6H6a4 4 0 000 8h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+
+        // name: accessible name and tooltip; keys: TipTap's built-in shortcut
+        // (see the extensions' addKeyboardShortcuts), shown in the tooltip.
         var groups = [
             [
-                { label: 'H1', cmd: function () { editor.chain().focus().toggleHeading({ level: 1 }).run(); }, active: function () { return editor.isActive('heading', { level: 1 }); } },
-                { label: 'H2', cmd: function () { editor.chain().focus().toggleHeading({ level: 2 }).run(); }, active: function () { return editor.isActive('heading', { level: 2 }); } },
-                { label: 'H3', cmd: function () { editor.chain().focus().toggleHeading({ level: 3 }).run(); }, active: function () { return editor.isActive('heading', { level: 3 }); } },
+                { icon: ICON_UNDO, name: 'Undo', keys: 'Mod+Z', cmd: function () { editor.chain().focus().undo().run(); }, enabled: function () { return editor.can().undo(); } },
+                { icon: ICON_REDO, name: 'Redo', keys: 'Mod+Y', cmd: function () { editor.chain().focus().redo().run(); }, enabled: function () { return editor.can().redo(); } },
             ],
             [
-                { label: 'B', cmd: function () { editor.chain().focus().toggleBold().run(); }, active: function () { return editor.isActive('bold'); }, style: 'font-weight:bold' },
-                { label: 'I', cmd: function () { editor.chain().focus().toggleItalic().run(); }, active: function () { return editor.isActive('italic'); }, style: 'font-style:italic' },
-                { label: 'S', cmd: function () { editor.chain().focus().toggleStrike().run(); }, active: function () { return editor.isActive('strike'); }, style: 'text-decoration:line-through' },
-                { label: '<>', cmd: function () { editor.chain().focus().toggleCode().run(); }, active: function () { return editor.isActive('code'); } },
+                { label: 'H1', name: 'Heading 1', keys: 'Mod+Alt+1', cmd: function () { editor.chain().focus().toggleHeading({ level: 1 }).run(); }, active: function () { return editor.isActive('heading', { level: 1 }); } },
+                { label: 'H2', name: 'Heading 2', keys: 'Mod+Alt+2', cmd: function () { editor.chain().focus().toggleHeading({ level: 2 }).run(); }, active: function () { return editor.isActive('heading', { level: 2 }); } },
+                { label: 'H3', name: 'Heading 3', keys: 'Mod+Alt+3', cmd: function () { editor.chain().focus().toggleHeading({ level: 3 }).run(); }, active: function () { return editor.isActive('heading', { level: 3 }); } },
             ],
             [
-                { label: '\u2014', title: 'Horizontal Rule', cmd: function () { editor.chain().focus().setHorizontalRule().run(); } },
-                { label: '\u201C', title: 'Blockquote', cmd: function () { editor.chain().focus().toggleBlockquote().run(); }, active: function () { return editor.isActive('blockquote'); } },
+                { label: 'B', name: 'Bold', keys: 'Mod+B', cmd: function () { editor.chain().focus().toggleBold().run(); }, active: function () { return editor.isActive('bold'); }, style: 'font-weight:bold' },
+                { label: 'I', name: 'Italic', keys: 'Mod+I', cmd: function () { editor.chain().focus().toggleItalic().run(); }, active: function () { return editor.isActive('italic'); }, style: 'font-style:italic' },
+                { label: 'S', name: 'Strikethrough', keys: 'Mod+Shift+S', cmd: function () { editor.chain().focus().toggleStrike().run(); }, active: function () { return editor.isActive('strike'); }, style: 'text-decoration:line-through' },
+                { label: '<>', name: 'Inline code', keys: 'Mod+E', cmd: function () { editor.chain().focus().toggleCode().run(); }, active: function () { return editor.isActive('code'); } },
+                { icon: ICON_LINK, name: 'Link', keys: '', cmd: function () { editLink(); }, active: function () { return editor.isActive('link'); } },
             ],
             [
-                { label: '\u2022', title: 'Bullet List', cmd: function () { editor.chain().focus().toggleBulletList().run(); }, active: function () { return editor.isActive('bulletList'); } },
-                { label: '1.', title: 'Ordered List', cmd: function () { editor.chain().focus().toggleOrderedList().run(); }, active: function () { return editor.isActive('orderedList'); } },
-                { label: '\u2611', title: 'Task List', cmd: function () { editor.chain().focus().toggleTaskList().run(); }, active: function () { return editor.isActive('taskList'); } },
+                { label: '—', name: 'Horizontal rule', keys: '', hint: 'or type --- on an empty line', cmd: function () { editor.chain().focus().setHorizontalRule().run(); } },
+                { label: '“', name: 'Quote', keys: 'Mod+Shift+B', cmd: function () { editor.chain().focus().toggleBlockquote().run(); }, active: function () { return editor.isActive('blockquote'); } },
             ],
             [
-                { label: '\u229E', title: 'Table', cmd: function () { editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); } },
+                { label: '•', name: 'Bullet list', keys: 'Mod+Shift+8', cmd: function () { editor.chain().focus().toggleBulletList().run(); }, active: function () { return editor.isActive('bulletList'); } },
+                { label: '1.', name: 'Numbered list', keys: 'Mod+Shift+7', cmd: function () { editor.chain().focus().toggleOrderedList().run(); }, active: function () { return editor.isActive('orderedList'); } },
+                { label: '☑', name: 'Task list', keys: 'Mod+Shift+9', cmd: function () { editor.chain().focus().toggleTaskList().run(); }, active: function () { return editor.isActive('taskList'); } },
+            ],
+            [
+                { label: '⊞', name: 'Table', keys: '', cmd: function () { editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); } },
                 {
-                    label: '\uD83D\uDDBC', title: 'Image', cmd: function () {
+                    label: '🖼', name: 'Image', keys: '', hint: 'or paste / drop an image', cmd: function () {
                         var input = document.createElement('input');
                         input.type = 'file';
                         input.accept = 'image/*';
@@ -1047,22 +1138,31 @@
                 },
             ],
             [
-                { label: '{}', title: 'Code Block', cmd: function () { editor.chain().focus().toggleCodeBlock().run(); }, active: function () { return editor.isActive('codeBlock'); } },
+                { label: '{}', name: 'Code block', keys: 'Mod+Alt+C', cmd: function () { editor.chain().focus().toggleCodeBlock().run(); }, active: function () { return editor.isActive('codeBlock'); } },
             ],
         ];
+
+        toolbar.setAttribute('role', 'toolbar');
+        toolbar.setAttribute('aria-label', 'Formatting');
 
         groups.forEach(function (group, gi) {
             if (gi > 0) {
                 var sep = document.createElement('span');
                 sep.className = 'toolbar-sep';
+                sep.setAttribute('aria-hidden', 'true');
                 toolbar.appendChild(sep);
             }
             group.forEach(function (btn) {
                 var el = document.createElement('button');
                 el.className = 'toolbar-btn';
-                el.textContent = btn.label;
-                el.title = btn.title || btn.label;
+                if (btn.icon) el.innerHTML = btn.icon; else el.textContent = btn.label;
+                el.setAttribute('aria-label', btn.name);
+                el.title = btn.name + (btn.keys ? ' (' + shortcutLabel(btn.keys) + ')' : '') + (btn.hint ? ' — ' + btn.hint : '');
+                if (btn.keys) el.setAttribute('aria-keyshortcuts', btn.keys.replace('Mod', isMac ? 'Meta' : 'Control'));
+                if (btn.active) el.setAttribute('aria-pressed', 'false');
                 if (btn.style) el.setAttribute('style', btn.style);
+                // Keep the editor's selection: act on mousedown's default being prevented.
+                el.addEventListener('mousedown', function (e) { e.preventDefault(); });
                 el.addEventListener('click', function (e) { e.preventDefault(); btn.cmd(); updateToolbarState(); });
                 toolbar.appendChild(el);
             });
@@ -1081,17 +1181,19 @@
             var idx = 0;
             groups.forEach(function (group) {
                 group.forEach(function (btn) {
-                    if (buttons[idx]) {
-                        if (btn.active && btn.active()) {
-                            buttons[idx].classList.add('active');
-                        } else {
-                            buttons[idx].classList.remove('active');
-                        }
+                    var el = buttons[idx++];
+                    if (!el) return;
+                    if (btn.active) {
+                        var on = !!btn.active();
+                        el.classList.toggle('active', on);
+                        el.setAttribute('aria-pressed', on ? 'true' : 'false');
                     }
-                    idx++;
+                    if (btn.enabled) el.disabled = !btn.enabled();
                 });
             });
         }
+        updateToolbarState();
+        refreshToolbar = updateToolbarState;
     }
 
     function bindEditorEvents() {
@@ -1144,12 +1246,6 @@
             document.getElementById('move-modal').addEventListener('mousedown', function (e) {
                 if (e.target.id === 'move-modal') closeMovePicker();
             });
-            document.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape' && !document.getElementById('move-modal').classList.contains('hidden')) {
-                    e.preventDefault();
-                    closeMovePicker();
-                }
-            });
             document.getElementById('move-modal').addEventListener('keydown', function (e) {
                 if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                     e.preventDefault();
@@ -1181,6 +1277,10 @@
                 showContextMenu(e, null);
             });
         }
+
+        // Global shortcuts: Ctrl+N new page, Ctrl+K search, Ctrl+Shift+P
+        // publish, Esc closes menus and dialogs.
+        document.addEventListener('keydown', onGlobalKeydown);
 
         // Capture phase Ctrl+S for save (prevent browser default)
         document.addEventListener('keydown', function (e) {
@@ -1214,6 +1314,60 @@
             renderDocStatus();
             window.go.main.App.SetUIState('draft-hint-dismissed', '1').catch(function (e) { console.error('SetUIState:', errorMessage(e)); });
         });
+    }
+
+    function onGlobalKeydown(e) {
+        if (sheetResolve) return; // the confirmation sheet handles its own keys
+        var mod = e.ctrlKey || e.metaKey;
+        var inEditorView = currentView() === 'view-editor';
+
+        if (e.key === 'Escape') {
+            if (closeTopLayer()) e.preventDefault();
+            return;
+        }
+        if (!mod || !inEditorView) return;
+        var key = e.key.toLowerCase();
+
+        if (key === 'n' && !e.shiftKey && !e.altKey) {
+            e.preventDefault(); // WebView2 would open a new window
+            var cur = currentDocId ? findDoc(currentDocId) : null;
+            createDocument(cur ? (cur.parentId || '') : '', false);
+        } else if (key === 'k' && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            var search = document.getElementById('search-input');
+            search.focus();
+            search.select();
+        } else if (key === 'p' && e.shiftKey) {
+            e.preventDefault();
+            var btn = document.getElementById('btn-publish');
+            if (currentDocId && btn.style.display !== 'none' && !btn.disabled) publishCurrentDoc();
+        }
+    }
+
+    // closeTopLayer closes the topmost open menu, search result list or
+    // dialog. Returns whether anything was closed.
+    function closeTopLayer() {
+        var menus = ['context-menu', 'ws-context-menu'].map(function (id) { return document.getElementById(id); })
+            .filter(function (m) { return m && !m.classList.contains('hidden'); });
+        if (menus.length) {
+            menus.forEach(function (m) { m.classList.add('hidden'); });
+            return true;
+        }
+        var results = document.getElementById('search-results');
+        if (!results.classList.contains('hidden')) {
+            results.classList.add('hidden');
+            document.getElementById('search-input').blur();
+            return true;
+        }
+        var modals = ['move-modal', 'history-modal', 'sharing-modal', 'settings-modal'];
+        for (var i = 0; i < modals.length; i++) {
+            var m = document.getElementById(modals[i]);
+            if (m && !m.classList.contains('hidden')) {
+                m.classList.add('hidden');
+                return true;
+            }
+        }
+        return false;
     }
 
     // === Sync & Publish ===
@@ -1386,7 +1540,7 @@
     function applyDocToEditor(doc) {
         clearTimeout(saveTimeout);
         document.getElementById('doc-title').value = doc.title;
-        editor.commands.setContent(doc.content || '', { emitUpdate: false });
+        loadEditorContent(doc.content);
         markClean(doc.title);
         saveState = 'saved';
         setDocMeta(doc);
@@ -1532,7 +1686,7 @@
                 'Restore'))) return;
             try {
                 var doc = await window.go.main.App.RestoreVersion(currentDocId, selectedRevisionId);
-                editor.commands.setContent(doc.content || '', { emitUpdate: false });
+                loadEditorContent(doc.content);
                 document.getElementById('doc-title').value = doc.title;
                 markClean(doc.title);
                 document.getElementById('history-modal').classList.add('hidden');
@@ -1876,7 +2030,7 @@
         try {
             var doc = await window.go.main.App.GetDocument(id);
             document.getElementById('doc-title').value = doc.title;
-            editor.commands.setContent(doc.content || '', { emitUpdate: false });
+            loadEditorContent(doc.content);
             // Compare future edits against the serializer's own output, not the
             // raw file: TipTap's markdown round-trip is not byte-identical
             // (blank lines after lists/tables, escaping), so comparing against
@@ -1987,6 +2141,17 @@
         setSaveStatus('unsaved');
         clearTimeout(saveTimeout);
         saveTimeout = setTimeout(saveNow, autoSaveDelay);
+    }
+
+    // loadEditorContent shows a page's markdown with a fresh undo history.
+    // Without the reset, Ctrl+Z right after opening a page undid the load
+    // itself (emptying the page, which autosave then stored) and could replay
+    // edits from the previously open page.
+    function loadEditorContent(markdown) {
+        editor.commands.setContent(markdown || '', { emitUpdate: false });
+        var st = editor.state;
+        editor.view.updateState(st.constructor.create({ schema: st.schema, doc: st.doc, plugins: st.plugins }));
+        refreshToolbar(); // updateState fires no transaction, so the toolbar would not notice
     }
 
     // editorMarkdown returns the editor content as markdown with a single

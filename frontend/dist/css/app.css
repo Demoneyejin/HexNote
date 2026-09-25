@@ -2317,3 +2317,30 @@ html, body {
     flex-shrink: 0;
     margin-left: auto;
 }
+
+/* Text field inside the confirmation sheet (askText) */
+.confirm-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 20px;
+}
+
+.confirm-field.hidden {
+    display: none;
+}
+
+.confirm-field label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.toolbar-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.toolbar-btn svg {
+    display: block;
+}
