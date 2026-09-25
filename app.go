@@ -1074,17 +1074,41 @@ func (a *App) PreviewRevision(docID string, revisionID string) (string, error) {
 	return drive.LocalizeContent(content, doc.WorkspaceID), nil
 }
 
-func (a *App) RestoreVersion(docID string, revisionID string) (*models.Document, error) {
+// RestoreVersion replaces a page's text with an earlier Drive revision. The
+// text it replaces stays recoverable: if the page is published and up to
+// date, that text is already the newest revision on Drive; if it has
+// unpublished edits, they are first saved as a draft page
+// "<title> (before restore)" next to it. The restored text is a draft until
+// published.
+func (a *App) RestoreVersion(docID string, revisionID string) (*models.RestoreResult, error) {
 	content, err := a.PreviewRevision(docID, revisionID)
 	if err != nil {
 		return nil, err
 	}
-	doc, err := a.db.GetDocument(docID)
+	doc, err := a.getValidatedDoc(docID)
 	if err != nil {
 		return nil, err
 	}
-	// Use the workspace-guarded UpdateDocument instead of a.db.UpdateDocument directly
-	return a.UpdateDocument(docID, doc.Title, content)
+
+	result := &models.RestoreResult{}
+	if doc.Status == "draft" && doc.Content != content {
+		backup, err := a.db.CreateDocument(doc.Title+" (before restore)", doc.ParentID, doc.WorkspaceID, false)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := a.db.UpdateDocument(backup.ID, backup.Title, doc.Content); err != nil {
+			return nil, err
+		}
+		result.BackupID = backup.ID
+		result.BackupTitle = backup.Title
+	}
+
+	updated, err := a.UpdateDocument(docID, doc.Title, content)
+	if err != nil {
+		return nil, err
+	}
+	result.Document = updated
+	return result, nil
 }
 
 // === Export ===

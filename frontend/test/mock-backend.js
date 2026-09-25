@@ -240,8 +240,15 @@
         RestoreVersion: function (id, rev) {
             var content = impl.PreviewRevision(id, rev);
             var d = requireDoc(id);
+            var res = {};
+            if (d.status === 'draft' && d.content !== content) {
+                var b = impl.CreateDocument(d.title + ' (before restore)', d.parentId, false);
+                S.docs[b.id].content = d.content;
+                res.backupId = b.id; res.backupTitle = b.title;
+            }
             d.content = content; d.status = 'draft';
-            return clone(d);
+            res.document = clone(d);
+            return res;
         },
 
         // --- UI state ---

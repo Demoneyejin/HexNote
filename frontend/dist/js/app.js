@@ -967,19 +967,7 @@
 
         editor = new TipTap.Editor({
             element: document.getElementById('editor'),
-            extensions: [
-                TipTap.StarterKit,
-                TipTap.Image.configure({ inline: false, allowBase64: false, HTMLAttributes: { draggable: 'true' } }),
-                TipTap.Placeholder.configure({ placeholder: 'Start writing...' }),
-                TipTap.Table.configure({ resizable: true }),
-                TipTap.TableRow,
-                TipTap.TableCell,
-                TipTap.TableHeader,
-                TipTap.TaskList,
-                TipTap.TaskItem.configure({ nested: true }),
-                TipTap.Link.configure({ openOnClick: false }),
-                TipTap.Markdown,
-            ],
+            extensions: editorExtensions(true),
             onUpdate: function () { onEditorChange(); },
             editorProps: {
                 handleDrop: function (view, event, slice, moved) {
@@ -1055,6 +1043,43 @@
         } else {
             chain.setLink({ href: url }).run();
         }
+    }
+
+    // editorExtensions builds the extension list shared by the main editor
+    // and the read-only version preview.
+    function editorExtensions(editable) {
+        return [
+            TipTap.StarterKit,
+            TipTap.Image.configure({ inline: false, allowBase64: false, HTMLAttributes: { draggable: editable ? 'true' : 'false' } }),
+            TipTap.Placeholder.configure({ placeholder: editable ? 'Start writing...' : '' }),
+            TipTap.Table.configure({ resizable: editable }),
+            TipTap.TableRow,
+            TipTap.TableCell,
+            TipTap.TableHeader,
+            TipTap.TaskList,
+            TipTap.TaskItem.configure({ nested: true }),
+            TipTap.Link.configure({ openOnClick: false }),
+            TipTap.Markdown,
+        ];
+    }
+
+    // The version preview is a read-only editor, so it looks like the page.
+    var previewEditor = null;
+
+    function showPreviewMarkdown(markdown) {
+        var el = document.getElementById('history-preview-content');
+        if (!previewEditor) {
+            previewEditor = new TipTap.Editor({ element: el, editable: false, extensions: editorExtensions(false) });
+        }
+        previewEditor.commands.setContent(markdown || '', { emitUpdate: false });
+        el.scrollTop = 0;
+    }
+
+    function setPreviewStatus(text) {
+        var st = document.getElementById('history-preview-status');
+        st.textContent = text || '';
+        st.classList.toggle('hidden', !text);
+        document.getElementById('history-preview-content').classList.toggle('hidden', !!text);
     }
 
     async function uploadAndInsertImage(file) {
@@ -1636,17 +1661,18 @@
         try {
             var revisions = await window.go.main.App.GetVersionHistory(currentDocId);
             if (!revisions || revisions.length === 0) {
-                listEl.innerHTML = '<p class="history-empty">No version history available. Sync to Drive first to enable version tracking.</p>';
+                listEl.innerHTML = '<p class="history-empty">No versions yet. Every publish saves a version on Google Drive.</p>';
                 return;
             }
             listEl.innerHTML = revisions.map(function (r) {
                 var date = new Date(r.modifiedTime).toLocaleString();
                 var user = r.lastModifyingUser || 'Unknown';
-                var sizeKB = Math.round((r.size || 0) / 1024);
+                var size = r.size || 0;
+                var sizeText = size < 1024 ? size + ' bytes' : Math.round(size / 1024) + ' KB';
                 return '<button class="history-item" data-rev="' + r.revisionId + '">' +
                     '<span class="history-item-date">' + date + '</span>' +
                     '<span class="history-item-user">' + escapeHtml(user) + '</span>' +
-                    '<span class="history-item-size">' + sizeKB + ' KB</span>' +
+                    '<span class="history-item-size">' + sizeText + '</span>' +
                     '</button>';
             }).join('');
 
@@ -1657,13 +1683,15 @@
                     selectedRevisionId = btn.dataset.rev;
                     previewEl.classList.remove('hidden');
                     document.getElementById('history-preview-date').textContent = btn.querySelector('.history-item-date').textContent;
-                    document.getElementById('history-preview-content').textContent = 'Loading...';
+                    setPreviewStatus('Loading\u2026');
                     try {
                         var content = await window.go.main.App.PreviewRevision(currentDocId, selectedRevisionId);
-                        document.getElementById('history-preview-content').textContent = content;
+                        if (selectedRevisionId !== btn.dataset.rev) return; // another version was picked meanwhile
+                        setPreviewStatus('');
+                        showPreviewMarkdown(content);
                     } catch (e) {
                         console.error('PreviewRevision:', errorMessage(e));
-                        document.getElementById('history-preview-content').textContent = describeError(e, 'load this version').text;
+                        setPreviewStatus(describeError(e, 'load this version').text);
                     }
                 });
             });
@@ -1681,18 +1709,31 @@
         document.getElementById('btn-restore-version').addEventListener('click', async function () {
             if (!currentDocId || !selectedRevisionId) return;
             var when = document.getElementById('history-preview-date').textContent;
+            var meta = currentDocMeta || {};
+            var keepNote = meta.status === 'draft'
+                ? ' Your unpublished edits are first saved as a separate draft page, so nothing is lost.'
+                : ' The current text stays in this list as the newest version.';
             if (!(await askConfirm('Restore this version?',
-                'The page text is replaced with the version from ' + when + '. The restored text is saved on this PC as unpublished changes until you publish it.',
+                'The page text is replaced with the version from ' + when + '.' + keepNote +
+                ' The restored text stays on this PC until you publish it.',
                 'Restore'))) return;
             try {
-                var doc = await window.go.main.App.RestoreVersion(currentDocId, selectedRevisionId);
+                if (window.__hexnoteHasUnsaved) await saveNow();
+                var res = await window.go.main.App.RestoreVersion(currentDocId, selectedRevisionId);
+                var doc = res.document;
                 loadEditorContent(doc.content);
                 document.getElementById('doc-title').value = doc.title;
                 markClean(doc.title);
                 document.getElementById('history-modal').classList.add('hidden');
                 setDocMeta(doc);
                 setSaveStatus('saved');
-                showToast('Version restored', 'success');
+                await loadTree();
+                if (res.backupId) {
+                    showToast('Version restored. Your previous text is in \u201c' + res.backupTitle + '\u201d.', 'success', 8000,
+                        { label: 'Open', run: function () { selectDocument(res.backupId); } });
+                } else {
+                    showToast('Version restored', 'success');
+                }
             } catch (e) {
                 showError('restore this version', e);
             }

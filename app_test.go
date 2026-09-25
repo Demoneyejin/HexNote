@@ -986,8 +986,8 @@ func TestRestoreVersionLocalizesImages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Content != local {
-		t.Errorf("restored content = %q, want %q", restored.Content, local)
+	if restored.Document.Content != local {
+		t.Errorf("restored content = %q, want %q", restored.Document.Content, local)
 	}
 }
 
@@ -1013,5 +1013,58 @@ func TestGetWorkspacesReportsAccess(t *testing.T) {
 	list, _ = ta.GetWorkspaces()
 	if list[0].Access != "owner" {
 		t.Errorf("access = %q, want owner", list[0].Access)
+	}
+}
+
+// === Item 16: restoring keeps the replaced text recoverable ===
+
+func TestRestoreBacksUpUnpublishedEdits(t *testing.T) {
+	ta := newTestApp(t)
+	doc := ta.newPublishedPage(t, "Roadmap", "v1\n", "")
+	ta.UpdateDocument(doc.ID, "Roadmap", "v2\n")
+	ta.PublishDocument(doc.ID)
+	ta.UpdateDocument(doc.ID, "Roadmap", "unpublished work\n")
+
+	revs, _ := ta.GetVersionHistory(doc.ID)
+	first := revs[len(revs)-1].RevisionID // oldest (list is newest first)
+	res, err := ta.RestoreVersion(doc.ID, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Document.Content != "v1\n" || res.Document.Status != "draft" {
+		t.Errorf("restored = %+v", res.Document)
+	}
+	if res.BackupID == "" || res.BackupTitle != "Roadmap (before restore)" {
+		t.Fatalf("expected a backup page, got %+v", res)
+	}
+	backup, _ := ta.GetDocument(res.BackupID)
+	if backup.Content != "unpublished work\n" || backup.Status != "draft" {
+		t.Errorf("backup = %+v", backup)
+	}
+}
+
+func TestRestoreOfUpToDatePageNeedsNoBackup(t *testing.T) {
+	ta := newTestApp(t)
+	doc := ta.newPublishedPage(t, "Roadmap", "v1\n", "")
+	ta.UpdateDocument(doc.ID, "Roadmap", "v2\n")
+	ta.PublishDocument(doc.ID)
+
+	revs, _ := ta.GetVersionHistory(doc.ID)
+	res, err := ta.RestoreVersion(doc.ID, revs[len(revs)-1].RevisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.BackupID != "" {
+		t.Errorf("published text is already a Drive revision; no backup expected, got %+v", res)
+	}
+	// ...and the replaced text really is in the history.
+	found := false
+	for _, r := range revs {
+		if c, _ := ta.PreviewRevision(doc.ID, r.RevisionID); c == "v2\n" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("v2 should be recoverable from version history")
 	}
 }

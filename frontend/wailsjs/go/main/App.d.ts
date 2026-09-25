@@ -72,7 +72,7 @@ export function RenameWorkspace(arg1:string,arg2:string):Promise<void>;
 
 export function ResolveFolderLink(arg1:string):Promise<models.DriveFolder>;
 
-export function RestoreVersion(arg1:string,arg2:string):Promise<models.Document>;
+export function RestoreVersion(arg1:string,arg2:string):Promise<models.RestoreResult>;
 
 export function SearchDocuments(arg1:string):Promise<Array<models.SearchResult>>;
 

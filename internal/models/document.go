@@ -29,6 +29,14 @@ type SearchResult struct {
 	Snippet string `json:"snippet"`
 }
 
+// RestoreResult is what RestoreVersion did. BackupID/BackupTitle name the
+// page that holds the text from before the restore, when one was needed.
+type RestoreResult struct {
+	Document    *Document `json:"document"`
+	BackupID    string    `json:"backupId,omitempty"`
+	BackupTitle string    `json:"backupTitle,omitempty"`
+}
+
 type Revision struct {
 	RevisionID        string `json:"revisionId"`
 	ModifiedTime      string `json:"modifiedTime"`

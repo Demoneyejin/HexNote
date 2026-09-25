@@ -554,7 +554,7 @@ html, body {
     overflow: auto;
 }
 
-#editor .ProseMirror {
+#editor .ProseMirror, .history-preview-body .ProseMirror {
     font-family: var(--font);
     font-size: 15px;
     line-height: 1.7;
@@ -564,7 +564,7 @@ html, body {
     padding: 8px 0;
 }
 
-#editor .ProseMirror > *:first-child { margin-top: 0; }
+#editor .ProseMirror > *:first-child, .history-preview-body .ProseMirror > *:first-child { margin-top: 0; }
 
 /* Placeholder */
 #editor .ProseMirror p.is-editor-empty:first-child::before {
@@ -576,12 +576,12 @@ html, body {
 }
 
 /* Headings */
-#editor .ProseMirror h1 { font-size: 1.8em; margin: 0.8em 0 0.4em; font-weight: 700; }
-#editor .ProseMirror h2 { font-size: 1.5em; margin: 0.7em 0 0.35em; font-weight: 600; }
-#editor .ProseMirror h3 { font-size: 1.25em; margin: 0.6em 0 0.3em; font-weight: 600; }
+#editor .ProseMirror h1, .history-preview-body .ProseMirror h1 { font-size: 1.8em; margin: 0.8em 0 0.4em; font-weight: 700; }
+#editor .ProseMirror h2, .history-preview-body .ProseMirror h2 { font-size: 1.5em; margin: 0.7em 0 0.35em; font-weight: 600; }
+#editor .ProseMirror h3, .history-preview-body .ProseMirror h3 { font-size: 1.25em; margin: 0.6em 0 0.3em; font-weight: 600; }
 
 /* Inline code */
-#editor .ProseMirror code {
+#editor .ProseMirror code, .history-preview-body .ProseMirror code {
     font-family: var(--font-mono);
     background: var(--sidebar-bg);
     padding: 2px 5px;
@@ -590,20 +590,20 @@ html, body {
 }
 
 /* Code blocks */
-#editor .ProseMirror pre {
+#editor .ProseMirror pre, .history-preview-body .ProseMirror pre {
     background: var(--sidebar-bg);
     border-radius: var(--radius);
     padding: 16px;
     overflow-x: auto;
 }
-#editor .ProseMirror pre code {
+#editor .ProseMirror pre code, .history-preview-body .ProseMirror pre code {
     background: none;
     padding: 0;
     font-size: 0.9em;
 }
 
 /* Blockquote */
-#editor .ProseMirror blockquote {
+#editor .ProseMirror blockquote, .history-preview-body .ProseMirror blockquote {
     border-left: 3px solid var(--primary);
     padding-left: 16px;
     margin-left: 0;
@@ -611,63 +611,63 @@ html, body {
 }
 
 /* Tables */
-#editor .ProseMirror table {
+#editor .ProseMirror table, .history-preview-body .ProseMirror table {
     border-collapse: collapse;
     width: 100%;
     margin: 1em 0;
 }
 #editor .ProseMirror th,
-#editor .ProseMirror td {
+#editor .ProseMirror td, .history-preview-body .ProseMirror th, .history-preview-body .ProseMirror td {
     border: 1px solid var(--border);
     padding: 8px 12px;
     text-align: left;
 }
-#editor .ProseMirror th {
+#editor .ProseMirror th, .history-preview-body .ProseMirror th {
     background: var(--sidebar-bg);
     font-weight: 600;
 }
 
 /* Images */
-#editor .ProseMirror img {
+#editor .ProseMirror img, .history-preview-body .ProseMirror img {
     max-width: 100%;
     height: auto;
     border-radius: var(--radius);
 }
-#editor .ProseMirror img.ProseMirror-selectednode {
+#editor .ProseMirror img.ProseMirror-selectednode, .history-preview-body .ProseMirror img.ProseMirror-selectednode {
     outline: 2px solid var(--primary);
     outline-offset: 2px;
 }
 
 /* Lists */
 #editor .ProseMirror ul,
-#editor .ProseMirror ol {
+#editor .ProseMirror ol, .history-preview-body .ProseMirror ul, .history-preview-body .ProseMirror ol {
     padding-left: 24px;
 }
 
 /* Task lists */
-#editor .ProseMirror ul[data-type="taskList"] {
+#editor .ProseMirror ul[data-type="taskList"], .history-preview-body .ProseMirror ul[data-type="taskList"] {
     list-style: none;
     padding-left: 0;
 }
-#editor .ProseMirror ul[data-type="taskList"] li {
+#editor .ProseMirror ul[data-type="taskList"] li, .history-preview-body .ProseMirror ul[data-type="taskList"] li {
     display: flex;
     align-items: flex-start;
     gap: 8px;
 }
-#editor .ProseMirror ul[data-type="taskList"] li > label {
+#editor .ProseMirror ul[data-type="taskList"] li > label, .history-preview-body .ProseMirror ul[data-type="taskList"] li > label {
     flex-shrink: 0;
     margin-top: 3px;
 }
 
 /* Horizontal rule */
-#editor .ProseMirror hr {
+#editor .ProseMirror hr, .history-preview-body .ProseMirror hr {
     border: none;
     border-top: 1px solid var(--border);
     margin: 1.5em 0;
 }
 
 /* Links */
-#editor .ProseMirror a {
+#editor .ProseMirror a, .history-preview-body .ProseMirror a {
     color: var(--primary);
     text-decoration: underline;
 }
@@ -1724,16 +1724,38 @@ html, body {
 .history-preview-body {
     flex: 1;
     overflow-y: auto;
-    font-size: 13px;
-    font-family: var(--font-mono);
-    line-height: 1.6;
     color: var(--text);
     background: var(--sidebar-bg);
     border-radius: var(--radius);
-    padding: 12px;
-    white-space: pre-wrap;
-    word-break: break-word;
+    padding: 4px 16px;
     margin: 0;
+}
+
+.history-preview-body.hidden {
+    display: none;
+}
+
+/* The preview is a read-only editor: same typography, smaller. */
+.history-preview-body .ProseMirror {
+    font-size: 14px;
+    line-height: 1.6;
+    outline: none;
+    min-height: 0;
+    padding: 12px 0;
+    word-break: break-word;
+}
+
+.history-preview-status {
+    flex: 1;
+    padding: 16px;
+    font-size: 13px;
+    color: var(--text-muted);
+    background: var(--sidebar-bg);
+    border-radius: var(--radius);
+}
+
+.history-preview-status.hidden {
+    display: none;
 }
 
 /* ========================================

@@ -36,6 +36,12 @@ export namespace models {
 	    color: string;
 	}
 
+	export interface RestoreResult {
+	    document: models.Document;
+	    backupId?: string;
+	    backupTitle?: string;
+	}
+
 	export interface Revision {
 	    revisionId: string;
 	    modifiedTime: string;
