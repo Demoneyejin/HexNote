@@ -61,10 +61,12 @@ func Classify(err error) ErrorKind {
 		if re.Response != nil && (re.Response.StatusCode == http.StatusBadRequest || re.Response.StatusCode == http.StatusUnauthorized) {
 			return KindAuth
 		}
-		if re.Response != nil && re.Response.StatusCode >= 500 {
+		if re.Response != nil && (re.Response.StatusCode >= 500 || re.Response.StatusCode == http.StatusTooManyRequests) {
 			return KindOffline
 		}
-		return KindAuth
+		// Anything else from the token endpoint is not proof the sign-in is
+		// gone; keep the token.
+		return KindUnknown
 	}
 
 	var ge *googleapi.Error

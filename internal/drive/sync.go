@@ -138,6 +138,19 @@ func (sm *SyncManager) pullFromDrive(workspace *models.Workspace) (*SyncResult, 
 		return nil, err
 	}
 
+	// An empty listing does not prove anything was deleted: Drive also
+	// returns nothing for a folder this sign-in cannot see (access removed,
+	// Solo mode's drive.file scope, a folder in the trash). Only when the
+	// workspace folder itself is readable and not trashed do missing files
+	// mean a teammate deleted them.
+	root, err := sm.client.GetFileInfo(workspace.DriveFolderID)
+	if err != nil {
+		return nil, fmt.Errorf("check the workspace folder: %w", err)
+	}
+	if root.Trashed {
+		return nil, fmt.Errorf("ERR_NOTFOUND: the workspace folder %q is in the Google Drive trash", root.Name)
+	}
+
 	// Every folder was listed successfully, so anything left in run.local is
 	// no longer in the workspace on Drive: a teammate trashed or deleted it.
 	sm.reconcileMissing(tree, run)

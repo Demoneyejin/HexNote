@@ -1099,3 +1099,70 @@ func TestUseBundledCredentialsWithoutBundledClient(t *testing.T) {
 		t.Error("BundledAvailable should be false in a plain build")
 	}
 }
+
+// === Review fixes ===
+
+// A workspace folder this sign-in can no longer see lists as empty. That
+// must not be read as "every page was deleted".
+func TestRefreshWithInvisibleWorkspaceFolderKeepsPages(t *testing.T) {
+	ta := newTestApp(t)
+	page := ta.newPublishedPage(t, "Roadmap", "x\n", "")
+	ta.fake.Mu.Lock()
+	ta.fake.Files[page.DriveFileID].Parents = []string{"elsewhere"} // listing now empty
+	ta.fake.Mu.Unlock()
+	ta.fake.FailFor["GET /drive/v3/files/root-folder?"] = 404
+
+	if err := ta.refresh(); err == nil || !strings.HasPrefix(err.Error(), "ERR_NOTFOUND:") {
+		t.Fatalf("refresh = %v, want ERR_NOTFOUND", err)
+	}
+	if d, err := ta.GetDocument(page.ID); err != nil || d.DriveFileID == "" {
+		t.Fatalf("page must be kept and stay linked: %+v, %v", d, err)
+	}
+}
+
+func TestRefreshWithTrashedWorkspaceFolderKeepsPages(t *testing.T) {
+	ta := newTestApp(t)
+	page := ta.newPublishedPage(t, "Roadmap", "x\n", "")
+	ta.fake.Mu.Lock()
+	ta.fake.Files["root-folder"].Trashed = true
+	ta.fake.Files[page.DriveFileID].Trashed = true
+	ta.fake.Mu.Unlock()
+	if err := ta.refresh(); err == nil {
+		t.Fatal("expected an error for a trashed workspace folder")
+	}
+	if _, err := ta.GetDocument(page.ID); err != nil {
+		t.Fatal("page must be kept")
+	}
+}
+
+// Publishing a page inside a folder whose move is pending must finish the
+// move, not mark the folder published where it is.
+func TestPublishingChildFinishesParentMove(t *testing.T) {
+	ta := newTestApp(t)
+	g := ta.publishedFolder(t, "G")
+	f := ta.publishedFolder(t, "F")
+	client := ta.client()
+	ta.setDrive(nil)
+	if _, err := ta.MoveDocument(f.ID, g.ID); err != nil {
+		t.Fatal(err)
+	}
+	ta.setDrive(client)
+
+	ta.newPublishedPage(t, "Inside", "x\n", f.ID)
+	if p := ta.fake.Get(f.DriveFileID).Parents; len(p) != 1 || p[0] != g.DriveFileID {
+		t.Fatalf("F's Drive parents = %v, want [%s]", p, g.DriveFileID)
+	}
+	ta.refresh()
+	if d, _ := ta.GetDocument(f.ID); d.ParentID != g.ID {
+		t.Errorf("refresh moved F back out of G (parent %q)", d.ParentID)
+	}
+}
+
+func TestSuccessfulDeleteLeavesNoTombstone(t *testing.T) {
+	ta := newTestApp(t)
+	doc := ta.newPublishedPage(t, "Roadmap", "x\n", "")
+	ta.DeleteDocument(doc.ID)
+	if ids, _ := ta.db.GetDeletedDriveFiles(ta.ws.ID); len(ids) != 0 {
+		t.Errorf("tombstones = %v, want none after a successful trash", ids)
+	}
+}

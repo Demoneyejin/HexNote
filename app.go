@@ -476,9 +476,13 @@ func (a *App) DeleteDocument(id string) error {
 	client := a.client()
 	var pending, forbidden int
 	for _, fileID := range driveIDs {
+		// Tombstone first: a refresh running while the trash call is in
+		// flight must not re-import the page as new.
+		a.db.AddDeletedDriveFile(wsID, fileID)
 		if client != nil {
 			err := client.TrashFile(fileID)
 			if err == nil || drive.IsNotFound(err) {
+				a.db.RemoveDeletedDriveFile(wsID, fileID)
 				continue
 			}
 			switch drive.Classify(err) {
@@ -494,7 +498,6 @@ func (a *App) DeleteDocument(id string) error {
 		} else {
 			pending++
 		}
-		a.db.AddDeletedDriveFile(wsID, fileID)
 	}
 
 	switch {
@@ -892,12 +895,16 @@ func (a *App) ensureParentFoldersPublished(client *drive.Client, parentID string
 		return ws.DriveFolderID, nil
 	}
 
-	// If parent already has a DriveFileID, use it (pushing a pending
-	// rename first, best effort: the child can be published either way)
+	// If parent already has a DriveFileID, use it. A draft folder has a
+	// rename or a move that has not reached Drive; push both (best effort:
+	// the child can be published either way) and only then mark it
+	// published, or the next refresh would undo the pending move.
 	if parent.DriveFileID != "" {
 		if parent.Status == "draft" {
 			if err := client.RenameFile(parent.DriveFileID, parent.Title); err == nil {
-				a.db.SetDocumentStatus(parent.ID, "published")
+				if err := a.moveOnDrive(parent, parent.ParentID); err == nil {
+					a.db.SetDocumentStatus(parent.ID, "published")
+				}
 			}
 		}
 		return parent.DriveFileID, nil

@@ -35,6 +35,8 @@ func TestClassify(t *testing.T) {
 		{"invalid_grant bare", invalidGrant, KindAuth},
 		{"googleapi 401", fmt.Errorf("get: %w", &googleapi.Error{Code: 401}), KindAuth},
 		{"token endpoint 503 is transient", &url.Error{Op: "Post", URL: "x", Err: tokenServerDown}, KindOffline},
+		{"token endpoint 429 is transient", &oauth2.RetrieveError{Response: &http.Response{StatusCode: 429}}, KindOffline},
+		{"token endpoint 403 without error code keeps the token", &oauth2.RetrieveError{Response: &http.Response{StatusCode: 403}}, KindUnknown},
 		{"network error", fmt.Errorf("list files: %w", offline), KindOffline},
 		{"dns error", &url.Error{Op: "Get", URL: "x", Err: &net.DNSError{Err: "no such host", Name: "www.googleapis.com"}}, KindOffline},
 		{"deadline", fmt.Errorf("x: %w", context.DeadlineExceeded), KindOffline},

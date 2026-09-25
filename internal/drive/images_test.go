@@ -15,6 +15,10 @@ func TestLocalizeContentAcceptsEveryForm(t *testing.T) {
 		{"prose mentioning assets is untouched", "Put files in assets/ please.", "Put files in assets/ please."},
 		{"external link untouched", "![a](https://example.com/assets/x.png)", "![a](https://example.com/assets/x.png)"},
 		{"two images", "![a](assets/1.png) ![b](/images/old/2.png)", "![a](/images/local-ws/1.png) ![b](/images/local-ws/2.png)"},
+		{"external URL with /images/ untouched", "![p](https://cdn.example.com/images/products/shoe.png)", "![p](https://cdn.example.com/images/products/shoe.png)"},
+		{"external URL capital Images untouched", "![p](https://x.org/Images/abc/y.png)", "![p](https://x.org/Images/abc/y.png)"},
+		{"reference-style definition", "![a][1]\n\n[1]: assets/img-x.png", "![a][1]\n\n[1]: /images/local-ws/img-x.png"},
+		{"prose mentioning /images/ path untouched", "Old links looked like /images/abc/x.png.", "Old links looked like /images/abc/x.png."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

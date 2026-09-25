@@ -146,7 +146,9 @@ func (c *Client) ListFiles(folderID string) ([]*drive.File, error) {
 		call := c.service.Files.List().
 			Q(q).
 			Fields("nextPageToken, files(id, name, mimeType, modifiedTime, size)").
-			PageSize(100)
+			PageSize(100).
+			SupportsAllDrives(true).
+			IncludeItemsFromAllDrives(true)
 
 		if pageToken != "" {
 			call = call.PageToken(pageToken)
