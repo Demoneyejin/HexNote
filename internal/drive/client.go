@@ -430,7 +430,7 @@ func (c *Client) GetFolderByID(folderID string) (*models.DriveFolder, error) {
 		return nil, fmt.Errorf("get folder: %w", err)
 	}
 	if f.MimeType != "application/vnd.google-apps.folder" {
-		return nil, fmt.Errorf("the linked item is not a folder")
+		return nil, fmt.Errorf("ERR_INVALID: The link points to a file, not a folder.")
 	}
 	return &models.DriveFolder{
 		ID:   f.Id,

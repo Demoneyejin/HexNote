@@ -37,19 +37,109 @@
     }
 
     // === Toast Notification System ===
-    function showToast(message, type, durationMs) {
+    // showToast shows a transient message. action, if given, adds a button:
+    // { label: 'Retry', run: function () { ... } }.
+    function showToast(message, type, durationMs, action) {
         type = type || 'info';
-        durationMs = durationMs || 4000;
+        durationMs = durationMs || (action ? 8000 : 4000);
         var container = document.getElementById('toast-container');
         var toast = document.createElement('div');
         toast.className = 'toast toast-' + type;
-        toast.textContent = message;
-        container.appendChild(toast);
-        requestAnimationFrame(function () { toast.classList.add('toast-visible'); });
-        setTimeout(function () {
+        var text = document.createElement('span');
+        text.className = 'toast-text';
+        text.textContent = message;
+        toast.appendChild(text);
+        function dismiss() {
             toast.classList.remove('toast-visible');
             toast.addEventListener('transitionend', function () { toast.remove(); });
-        }, durationMs);
+            setTimeout(function () { toast.remove(); }, 400);
+        }
+        if (action) {
+            var btn = document.createElement('button');
+            btn.className = 'toast-action';
+            btn.textContent = action.label;
+            btn.addEventListener('click', function () { dismiss(); action.run(); });
+            toast.appendChild(btn);
+        }
+        container.appendChild(toast);
+        requestAnimationFrame(function () { toast.classList.add('toast-visible'); });
+        setTimeout(dismiss, durationMs);
+    }
+
+    // === Errors ===
+    // The Go side prefixes errors with a stable code (see the Errors section
+    // in app.go). describeError turns one into a sentence and, where it
+    // helps, an action. The raw detail goes to the console.
+    function errorMessage(e) {
+        return (e && e.message) || String(e == null ? '' : e);
+    }
+
+    function errorCode(e) {
+        var m = /^(ERR_[A-Z]+):/.exec(errorMessage(e));
+        return m ? m[1] : null;
+    }
+
+    // what: short verb phrase for the failed action ("publish", "refresh").
+    // retry: optional function offered as a Retry action when offline.
+    function describeError(e, what, retry) {
+        var code = errorCode(e);
+        var lead = what ? 'Couldn\u2019t ' + what + '. ' : '';
+        switch (code) {
+            case 'ERR_OFFLINE':
+                return {
+                    code: code,
+                    text: lead + 'Google Drive can\u2019t be reached. Check your connection; your work is saved on this PC.',
+                    action: retry ? { label: 'Retry', run: retry } : null,
+                };
+            case 'ERR_AUTH':
+                return {
+                    code: code,
+                    text: lead + 'Your Google sign-in expired.',
+                    action: { label: 'Sign in again', run: async function () { await leaveEditor(); showSigninView(''); } },
+                };
+            case 'ERR_FORBIDDEN':
+                return {
+                    code: code,
+                    text: lead + 'You don\u2019t have permission to change this on Google Drive. Ask the folder owner for edit access.',
+                    action: activeWorkspace && activeWorkspace.driveFolderUrl
+                        ? { label: 'Open folder in Drive', run: openWorkspaceInDrive }
+                        : null,
+                };
+            case 'ERR_NOTFOUND':
+                return {
+                    code: code,
+                    text: lead + 'It no longer exists on Google Drive, or it isn\u2019t shared with you.',
+                    action: currentView() === 'view-editor' ? { label: 'Refresh', run: function () { triggerSync(); } } : null,
+                };
+            case 'ERR_CONFLICT':
+                return { code: code, text: lead + 'Someone else changed this page on Drive.', action: null };
+            case 'ERR_INVALID':
+                return { code: code, text: errorMessage(e).replace(/^ERR_INVALID:\s*/, ''), action: null };
+        }
+        return { code: null, text: lead + 'Something went wrong. Try again in a moment.', action: retry ? { label: 'Retry', run: retry } : null };
+    }
+
+    // showError reports a failed action in a toast.
+    function showError(what, e, retry) {
+        console.error('[' + (what || 'error') + ']', errorMessage(e));
+        var d = describeError(e, what, retry);
+        // An expired sign-in already switched to the sign-in view.
+        if (d.code === 'ERR_AUTH' && currentView() === 'view-signin') return;
+        showToast(d.text, d.code === 'ERR_OFFLINE' ? 'warning' : 'error', null, d.action);
+    }
+
+    function currentView() {
+        for (var i = 0; i < ALL_VIEWS.length; i++) {
+            var el = document.getElementById(ALL_VIEWS[i]);
+            if (el && !el.classList.contains('hidden')) return ALL_VIEWS[i];
+        }
+        return null;
+    }
+
+    function openWorkspaceInDrive() {
+        if (activeWorkspace && activeWorkspace.driveFolderUrl && window.runtime) {
+            window.runtime.BrowserOpenURL(activeWorkspace.driveFolderUrl);
+        }
     }
 
     // === Confirmation sheet ===
@@ -259,7 +349,7 @@
                 // Same client as before keeps the sign-in; a new one needs a sign-in.
                 await routeToCorrectView();
             } catch (e) {
-                errEl.textContent = 'Error: ' + (e.message || e);
+                errEl.textContent = describeError(e).text;
                 errEl.classList.remove('hidden');
             }
         });
@@ -315,7 +405,7 @@
             try {
                 await window.go.main.App.StartOAuthFlow();
             } catch (e) {
-                errEl.textContent = 'Error: ' + (e.message || e);
+                errEl.textContent = describeError(e, 'start the sign-in').text;
                 errEl.classList.remove('hidden');
                 waitEl.classList.add('hidden');
             }
@@ -460,7 +550,7 @@
             done = true;
             var name = input.value.trim();
             if (commit && name && name !== oldName) {
-                try { await window.go.main.App.RenameWorkspace(wsId, name); } catch (e) { showToast('Rename failed: ' + (e.message || e), 'error'); }
+                try { await window.go.main.App.RenameWorkspace(wsId, name); } catch (e) { showError('rename the workspace', e); }
             }
             showWorkspacesView(await window.go.main.App.GetWorkspaces());
         }
@@ -569,8 +659,7 @@
             // Pull published pages from Drive
             triggerSync();
         } catch (e) {
-            console.error('Open workspace error:', e);
-            showToast('Failed to open workspace', 'error');
+            showError('open the workspace', e);
         }
     }
 
@@ -603,7 +692,7 @@
                 loadFolders(parentId);
                 showToast('Folder created', 'success');
             } catch (e) {
-                showToast('Error creating folder: ' + (e.message || e), 'error');
+                showError('create the folder', e);
             }
         });
 
@@ -617,7 +706,7 @@
                 showToast('Workspace created!', 'success');
                 showWorkspacesView(workspaces);
             } catch (e) {
-                showToast('Error creating workspace: ' + (e.message || e), 'error');
+                showError('create the workspace', e);
             }
         });
 
@@ -659,7 +748,9 @@
                 // Deselect any list selection
                 document.querySelectorAll('#shared-folder-list .folder-item').forEach(function (b) { b.classList.remove('selected'); });
             } catch (e) {
-                resultEl.textContent = 'Error: ' + (e.message || e);
+                resultEl.textContent = errorCode(e) === 'ERR_NOTFOUND'
+                    ? 'No folder found at that link, or it isn\u2019t shared with ' + ((authStatus && authStatus.userEmail) || 'you') + '.'
+                    : describeError(e).text;
                 resultEl.className = 'status-text error-text';
                 selectedSharedFolder = null;
                 document.getElementById('btn-join-select').disabled = true;
@@ -679,7 +770,7 @@
                 showToast('Workspace joined!', 'success');
                 showWorkspacesView(workspaces);
             } catch (e) {
-                showToast('Error joining workspace: ' + (e.message || e), 'error');
+                showError('join the workspace', e);
             }
         });
 
@@ -726,7 +817,8 @@
             });
         } catch (e) {
             loadingEl.classList.add('hidden');
-            listEl.innerHTML = '<div class="folder-empty">Error loading shared folders: ' + escapeHtml(e.message || String(e)) + '</div>';
+            console.error('SearchSharedFolders:', errorMessage(e));
+            listEl.innerHTML = '<div class="folder-empty">' + escapeHtml(describeError(e, 'load shared folders').text) + '</div>';
         }
     }
 
@@ -761,7 +853,8 @@
             });
         } catch (e) {
             loadingEl.classList.add('hidden');
-            listEl.innerHTML = '<div class="folder-empty">Error loading folders: ' + escapeHtml(e.message || String(e)) + '</div>';
+            console.error('ListDriveFolders:', errorMessage(e));
+            listEl.innerHTML = '<div class="folder-empty">' + escapeHtml(describeError(e, 'load your Drive folders').text) + '</div>';
         }
     }
 
@@ -857,7 +950,7 @@
                     url = url.replace(/^\/+/, '/');
                     resolve(url);
                 } catch (e) {
-                    showToast('Image upload failed: ' + (e.message || e), 'error');
+                    showError('add the image', e);
                     resolve(null);
                 }
             };
@@ -1040,7 +1133,7 @@
             await loadTree();
         } catch (e) {
             statusEl.textContent = 'Refresh error';
-            showToast('Refresh failed: ' + (e.message || e), 'error');
+            showError('refresh from Drive', e, triggerSync);
         } finally {
             syncBtn.classList.remove('syncing');
         }
@@ -1069,7 +1162,7 @@
             await loadTree();
             return true;
         } catch (e) {
-            showToast('Publish failed: ' + (e.message || e), 'error');
+            showError('publish', e, function () { publishDocument(id); });
             return false;
         }
     }
@@ -1094,7 +1187,7 @@
             }
             await loadTree();
         } catch (e) {
-            showToast('Rename failed: ' + (e.message || e), 'error');
+            showError('rename', e);
         }
     }
 
@@ -1114,7 +1207,7 @@
                 showToast('Invitation sent to ' + email, 'success');
                 loadMembers();
             } catch (e) {
-                showToast('Error sharing: ' + (e.message || e), 'error');
+                showError('share the workspace', e);
             }
         });
     }
@@ -1192,12 +1285,14 @@
                         var content = await window.go.main.App.PreviewRevision(currentDocId, selectedRevisionId);
                         document.getElementById('history-preview-content').textContent = content;
                     } catch (e) {
-                        document.getElementById('history-preview-content').textContent = 'Error loading revision: ' + (e.message || e);
+                        console.error('PreviewRevision:', errorMessage(e));
+                        document.getElementById('history-preview-content').textContent = describeError(e, 'load this version').text;
                     }
                 });
             });
         } catch (e) {
-            listEl.innerHTML = '<p class="history-empty">' + escapeHtml(e.message || 'Error loading history') + '</p>';
+            console.error('GetVersionHistory:', errorMessage(e));
+            listEl.innerHTML = '<p class="history-empty">' + escapeHtml(describeError(e, 'load version history').text) + '</p>';
         }
     }
 
@@ -1221,7 +1316,7 @@
                 showToast('Version restored', 'success');
                 setSaveStatus('Saved');
             } catch (e) {
-                showToast('Error restoring version: ' + (e.message || e), 'error');
+                showError('restore this version', e);
             }
         });
     }
@@ -1235,7 +1330,7 @@
                 document.getElementById('setting-autosave').value = s.autoSaveDelaySecs || 2;
                 document.getElementById('settings-modal').classList.remove('hidden');
             } catch (e) {
-                showToast('Error loading settings', 'error');
+                showError('open settings', e);
             }
         });
 
@@ -1259,7 +1354,7 @@
                 document.getElementById('settings-modal').classList.add('hidden');
                 showToast('Settings saved', 'success');
             } catch (e) {
-                showToast('Error saving settings: ' + (e.message || e), 'error');
+                showError('save settings', e);
             }
         });
 
@@ -1268,8 +1363,9 @@
                 var path = await window.go.main.App.ExportWorkspace();
                 showToast('Exported to: ' + path, 'success', 6000);
             } catch (e) {
-                if (e.message && e.message.indexOf('no folder selected') >= 0) return; // user cancelled
-                showToast('Export failed: ' + (e.message || e), 'error');
+                // Wails rejects with a plain string, so check the text, not e.message.
+                if (errorMessage(e).indexOf('no folder selected') >= 0) return; // user cancelled
+                showError('export the workspace', e);
             }
         });
     }
@@ -1440,7 +1536,7 @@
             if (!isFolder) { await selectDocument(doc.id); document.getElementById('doc-title').select(); }
         } catch (e) {
             console.error('createDocument error:', e);
-            showToast('Error creating document', 'error');
+            showError(isFolder ? 'create the folder' : 'create the page', e);
         }
     }
 
@@ -1493,7 +1589,7 @@
             showToast('Deleted', 'info');
         } catch (e) {
             console.error('deleteDocument error:', e);
-            showToast('Error deleting: ' + (e.message || e), 'error');
+            showError('delete', e);
         }
     }
 

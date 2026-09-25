@@ -583,3 +583,33 @@ func TestRefreshPicksUpTeammateFolderRename(t *testing.T) {
 		t.Errorf("folder = %+v, want teammate's name", d)
 	}
 }
+
+// === Item 11: stable error prefixes for the frontend ===
+
+func TestErrorPrefixes(t *testing.T) {
+	ta := newTestApp(t)
+
+	ta.fake.FailFor["/permissions"] = 403
+	err := ta.ShareWorkspace(ta.ws.ID, "sam@example.com", "writer")
+	if err == nil || !strings.HasPrefix(err.Error(), "ERR_FORBIDDEN:") {
+		t.Errorf("ShareWorkspace 403 = %v, want ERR_FORBIDDEN", err)
+	}
+	delete(ta.fake.FailFor, "/permissions")
+
+	if _, err := ta.ResolveFolderLink("https://drive.google.com/drive/folders/missing"); err == nil || !strings.HasPrefix(err.Error(), "ERR_NOTFOUND:") {
+		t.Errorf("missing folder = %v, want ERR_NOTFOUND", err)
+	}
+	ta.fake.Put("afile", "notes.md", "text/plain", "root-folder", "x")
+	if _, err := ta.ResolveFolderLink("afile"); err == nil || !strings.HasPrefix(err.Error(), "ERR_INVALID:") {
+		t.Errorf("file link = %v, want ERR_INVALID", err)
+	}
+	if _, err := ta.ResolveFolderLink("not a link at all"); err == nil || !strings.HasPrefix(err.Error(), "ERR_INVALID:") {
+		t.Errorf("garbage link = %v, want ERR_INVALID", err)
+	}
+	if err := ta.ShareWorkspace(ta.ws.ID, "sam@example.com", "owner"); err == nil || !strings.HasPrefix(err.Error(), "ERR_INVALID:") {
+		t.Errorf("bad role = %v, want ERR_INVALID", err)
+	}
+	if err := ta.ImportCredentials(`{"web":{"client_id":"x"}}`); err == nil || !strings.HasPrefix(err.Error(), "ERR_INVALID:") {
+		t.Errorf("web client JSON = %v, want ERR_INVALID", err)
+	}
+}

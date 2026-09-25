@@ -2090,3 +2090,32 @@ html, body {
     padding: 4px 8px;
     margin-bottom: 4px;
 }
+
+/* Toast with an action button (Retry, Sign in again, ...) */
+.toast {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.toast-text {
+    flex: 1;
+    line-height: 1.4;
+}
+
+.toast-action {
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.toast-action:hover {
+    background: rgba(255, 255, 255, 0.3);
+}

@@ -133,6 +133,7 @@ func (a *App) setDrive(client *drive.Client) {
 //   ERR_FORBIDDEN: no permission on Drive      -> Open folder in Drive
 //   ERR_NOTFOUND:  file or folder is gone      -> Refresh
 //   ERR_CONFLICT:  changed on Drive by someone else (see PublishDocument)
+//   ERR_INVALID:   bad input; the rest of the message is shown as is
 // The rest of the message is detail for the console and log.
 
 var errNotSignedIn = errors.New("ERR_AUTH: not signed in to Google")
@@ -143,6 +144,10 @@ var errNotSignedIn = errors.New("ERR_AUTH: not signed in to Google")
 func (a *App) driveErr(action string, err error) error {
 	if err == nil {
 		return nil
+	}
+	// Already carries a code (for example ERR_INVALID from the client).
+	if strings.HasPrefix(err.Error(), "ERR_") {
+		return err
 	}
 	switch drive.Classify(err) {
 	case drive.KindAuth:
@@ -311,7 +316,7 @@ func (a *App) ResolveFolderLink(link string) (*models.DriveFolder, error) {
 	}
 	folderID := parseDriveFolderID(link)
 	if folderID == "" {
-		return nil, fmt.Errorf("could not extract folder ID from the link")
+		return nil, fmt.Errorf("ERR_INVALID: That doesn't look like a Google Drive folder link.")
 	}
 	folder, err := client.GetFolderByID(folderID)
 	return folder, a.driveErr("open folder link", err)
@@ -350,7 +355,7 @@ func (a *App) RenameDocument(id string, title string) (*models.Document, error) 
 	}
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return nil, fmt.Errorf("title cannot be empty")
+		return nil, fmt.Errorf("ERR_INVALID: The name cannot be empty.")
 	}
 	if err := a.db.RenameDocument(id, title); err != nil {
 		return nil, err
@@ -723,7 +728,7 @@ func (a *App) ShareWorkspace(workspaceID string, email string, role string) erro
 	}
 	// Validate role against allowlist — only "reader" and "writer" are permitted
 	if role != "reader" && role != "writer" {
-		return fmt.Errorf("invalid role %q: must be 'reader' or 'writer'", role)
+		return fmt.Errorf("ERR_INVALID: Choose Viewer or Editor (got %q).", role)
 	}
 	ws, err := a.db.GetActiveWorkspace()
 	if err != nil || ws == nil {

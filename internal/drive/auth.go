@@ -72,10 +72,10 @@ func (am *AuthManager) SaveCredentials(jsonContent string) error {
 	// Validate it's valid JSON with the expected structure
 	var creds credentialsJSON
 	if err := json.Unmarshal([]byte(jsonContent), &creds); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
+		return fmt.Errorf("ERR_INVALID: That isn't valid JSON. Paste the whole contents of the downloaded file (%v)", err)
 	}
 	if creds.Installed.ClientID == "" {
-		return fmt.Errorf("missing installed.client_id field")
+		return fmt.Errorf("ERR_INVALID: This isn't a Desktop app client. In Google Cloud Console create an OAuth client ID with Application type \"Desktop app\" and download its JSON.")
 	}
 
 	if err := os.MkdirAll(am.appDataDir, 0700); err != nil {
