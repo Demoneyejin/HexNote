@@ -1,35 +1,49 @@
 # Privacy Policy
 
-**HexNote** — Last updated: April 2026
+**HexNote** — Last updated: September 2026
 
 ## Summary
 
-HexNote does not collect, store, or transmit any of your personal data. Your documents live on your own machine and your own Google Drive account. We have zero access to your content.
+HexNote does not collect, store, or transmit any of your personal data to its authors. There is no HexNote server. Your documents live on your own PC and in your own Google Drive, and HexNote talks only to Google.
 
-## What HexNote accesses
+## How HexNote signs in to Google
 
-- **Google Drive**: HexNote reads and writes markdown files and images to folders you explicitly choose in your own Google Drive. This requires Google OAuth sign-in with the `drive` scope.
-- **Local storage**: HexNote stores a local SQLite database and image cache in your system's application data directory (`%APPDATA%/HexNote` on Windows, `~/Library/Application Support/HexNote` on macOS). This data never leaves your machine.
+HexNote uses a Google Cloud project that **you** create (the "bring your own key" setup). You paste that project's OAuth client file into HexNote, and you sign in on Google's own page in your browser. The sign-in is granted to your Cloud project, not to the HexNote authors, who never see your credentials or tokens.
+
+## What Google Drive access HexNote asks for
+
+HexNote requests the Google Drive scope `https://www.googleapis.com/auth/drive`. Google describes it as permission to *"see, edit, create, and delete all of your Google Drive files"*. That is broader than HexNote needs for any single action, and we want to be exact about how it is used. HexNote uses it only to:
+
+- **List folder names** in your My Drive and folders shared with you, when you choose or join a workspace folder
+- **Create, read, update and rename** the `.md` files, subfolders and images inside your workspace folders
+- **Move to the Drive trash** the files of pages you delete in HexNote
+- **Read the revision history** of workspace files, to show and restore earlier versions
+- **View and change who can access a workspace folder**, when you use Share (adding or removing a collaborator)
+- **Read your email address**, to show which account you are signed in with
+
+HexNote does not open, read or change the contents of files outside your workspace folders. Because it is open source, you can check this in the code (`internal/drive/client.go` holds every Drive call).
+
+## What is stored on your PC
+
+In your application data folder (`%APPDATA%\HexNote` on Windows, `~/Library/Application Support/HexNote` on macOS):
+
+- `hexnote.db`: your pages (including drafts that were never published), the page tree, search index, settings and the member list of shared workspaces
+- `image_cache/`: images you added to pages
+- `oauth_credentials.json`: the OAuth client file you pasted
+- `token.json`: your Google sign-in token. Signing out in HexNote deletes it.
+
+None of this leaves your PC except what you publish to Google Drive.
 
 ## What HexNote does NOT do
 
 - We do not collect analytics or telemetry
 - We do not track usage patterns
-- We do not store your Google account credentials (OAuth tokens are stored locally on your machine only)
-- We do not have a server — there is no backend that receives your data
+- We do not have a server; there is no backend that receives your data
 - We do not sell, share, or transfer any user data to third parties
-- We do not access any Google Drive files or folders beyond the ones you explicitly select as workspaces
 
-## Google OAuth
+## Revoking access
 
-HexNote uses Google OAuth 2.0 to authenticate with your Google account. When you sign in:
-
-1. A browser window opens to Google's official sign-in page
-2. You authorize HexNote to access your Google Drive
-3. An OAuth token is stored locally on your machine
-4. HexNote uses this token to read/write files in your chosen Drive folders
-
-You can revoke access at any time from your [Google Account permissions page](https://myaccount.google.com/permissions).
+Sign out from HexNote's Settings, and revoke the app at any time from your [Google Account permissions page](https://myaccount.google.com/permissions). Revoking does not delete anything on your PC or in your Drive.
 
 ## Data deletion
 

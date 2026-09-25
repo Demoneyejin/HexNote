@@ -31,7 +31,7 @@ HexNote is a **free desktop wiki/knowledge base** that replaces Confluence, Noti
 
 HexNote uses a **bring-your-own-key** model — you create free Google Cloud credentials and the app connects directly to your own Google Drive. No middleman, no third-party servers, no one else has access to your data.
 
-The setup takes about 5 minutes and only needs to be done once. It's completely free.
+The setup takes about 10 to 15 minutes the first time and only needs to be done once. It's completely free.
 
 ### Step 1: Create a Google Cloud Project
 
@@ -61,16 +61,7 @@ The setup takes about 5 minutes and only needs to be done once. It's completely 
    - Click **Create**
 5. **Download the JSON** file (click the download icon)
 
-### Step 4: Launch HexNote
-
-1. Download `hexnote.exe` from [Releases](../../releases) (or build from source)
-2. Launch it — you'll see the setup screen
-3. Click **"Show me how"** if you need a reminder of the steps
-4. Paste the contents of your downloaded JSON file
-5. Click **Save & Continue**
-6. Sign in with your Google account
-
-### Step 5: Set the consent screen to In production
+### Step 4: Set the consent screen to In production
 
 Your GCP project starts in **Testing** mode. In Testing, Google **expires every sign-in after 7 days**, so HexNote would ask you to sign in again every week, and only users you list as test users can sign in at all.
 
@@ -81,16 +72,31 @@ In production without Google verification, the sign-in page shows an "unverified
 
 If you prefer to stay in Testing, add everyone who will sign in under **Test users** (up to 100) and expect to sign in again weekly. If a sign-in expires, HexNote tells you and your pages saved on this PC stay safe.
 
+### Step 5: Launch HexNote
+
+1. Download `hexnote.exe` from [Releases](../../releases) (or build from source)
+2. Launch it — you'll see the setup screen
+3. Click **"Show me how"** if you need a reminder of the steps
+4. Paste the contents of your downloaded JSON file
+5. Click **Save & Continue**
+6. Sign in with your Google account in the browser window that opens
+7. Choose or create a Drive folder for your workspace (or join one that was shared with you)
+
+### What HexNote can access
+
+HexNote asks Google for the `drive` scope ("see, edit, create, and delete all of your Google Drive files"). It uses it to list folder names when you pick a workspace, to read and write the pages, subfolders and images inside your workspace folders, to move deleted pages to the Drive trash, to read version history, and to manage who can access a workspace folder when you use Share. It never opens files outside your workspace folders. See the [privacy policy](PRIVACY.md) for details.
+
 ---
 
 ## Sharing a Workspace
 
 1. Open your workspace in HexNote
 2. Click the **Share** button (or right-click workspace > Permissions)
-3. Enter your collaborator's email and role (reader/writer)
+3. Enter your collaborator's email and role (Viewer/Editor)
 4. They get access to the Google Drive folder
-5. They open HexNote > **Join shared workspace** > paste the Drive folder link or search for it
-6. They see all published pages
+5. They set up HexNote. The simplest way is to give them the same OAuth client JSON file you pasted (if your consent screen is still in Testing, add them under **Test users** first)
+6. They open HexNote > **Join a shared workspace** > paste the Drive folder link or search for it
+7. They see all published pages; HexNote refreshes from Drive every couple of minutes and when its window comes back to the front
 
 ---
 
@@ -98,9 +104,11 @@ If you prefer to stay in Testing, add everyone who will sign in under **Test use
 
 ```
 You write in HexNote
-    > Saved locally (SQLite + local files)
-    > Click "Publish" > pushed to Google Drive as .md files
-    > Collaborators click "Refresh" > see your published pages
+    > Saved on your PC (SQLite + local image cache)       "Saved on this PC · not published"
+    > Click "Publish" > pushed to Google Drive as .md files "Published · up to date"
+      (images go to an assets/ folder, linked with relative paths)
+    > Collaborators' HexNote refreshes from Drive automatically
+      (and warns before anyone overwrites a newer version)
 
 Your data lives in:
     1. Your machine (local cache - works offline)
