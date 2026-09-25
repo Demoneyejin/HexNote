@@ -61,6 +61,12 @@ export namespace models {
 	    lastSynced?: any;
 	}
 
+	export interface SyncSummary {
+	    updated: Array<string>;
+	    removed: Array<string>;
+	    detached: Array<string>;
+	}
+
 	export interface TreeNode {
 	    document: models.Document;
 	    children: Array<models.TreeNode>;

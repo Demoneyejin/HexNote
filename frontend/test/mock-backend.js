@@ -90,6 +90,7 @@
         // --- settings / auth ---
         GetSettings: function () { return clone(S.settings); },
         UpdateSettings: function (sync, theme, autosave) {
+            if (sync < 0) sync = 0;
             S.settings = { syncIntervalSecs: sync, theme: theme, autoSaveDelaySecs: autosave };
             return clone(S.settings);
         },
@@ -178,8 +179,8 @@
             S.syncResult = [];
             var ws = activeWs();
             if (ws) ws.lastSyncedAt = nowIso();
-            if (ids.length) setTimeout(function () { emit('sync:docs-updated', ids); }, 0);
-            return null;
+            if (ids.length) emit('sync:docs-updated', ids);
+            return { updated: ids, removed: [], detached: [] };
         },
         PublishDocument: function (id) {
             var d = requireDoc(id);

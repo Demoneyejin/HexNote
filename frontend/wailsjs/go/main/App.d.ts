@@ -82,7 +82,7 @@ export function StartOAuthFlow():Promise<void>;
 
 export function SwitchWorkspace(arg1:string):Promise<models.Workspace>;
 
-export function TriggerSync():Promise<void>;
+export function TriggerSync():Promise<models.SyncSummary>;
 
 export function UpdateDocument(arg1:string,arg2:string,arg3:string):Promise<models.Document>;
 

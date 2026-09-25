@@ -529,18 +529,19 @@ func (a *App) SearchDocuments(query string) ([]models.SearchResult, error) {
 // === Sync ===
 
 // TriggerSync pulls published content from Drive (refresh only, no push).
-func (a *App) TriggerSync() error {
+// It returns what changed, so the frontend can stay quiet when nothing did.
+func (a *App) TriggerSync() (*models.SyncSummary, error) {
 	syncMgr := a.syncer()
 	if syncMgr == nil {
-		return errNotSignedIn
+		return nil, errNotSignedIn
 	}
 	ws, err := a.db.GetActiveWorkspace()
 	if err != nil || ws == nil {
-		return fmt.Errorf("no active workspace")
+		return nil, fmt.Errorf("no active workspace")
 	}
 	result, syncErr := syncMgr.SyncWorkspace(ws)
 	if syncErr != nil {
-		return a.driveErr("refresh from Drive", syncErr)
+		return nil, a.driveErr("refresh from Drive", syncErr)
 	}
 
 	if len(result.UpdatedIDs) > 0 {
@@ -552,7 +553,7 @@ func (a *App) TriggerSync() error {
 			"detached": result.DetachedIDs,
 		})
 	}
-	return nil
+	return &models.SyncSummary{Updated: result.UpdatedIDs, Removed: result.RemovedIDs, Detached: result.DetachedIDs}, nil
 }
 
 // PublishDocument pushes a document (and its parent folders) to Google Drive.
@@ -913,7 +914,18 @@ func (a *App) GetSettings() (*models.Settings, error) {
 	return &s, nil
 }
 
+// UpdateSettings stores the user's settings. syncIntervalSecs is how often
+// the open workspace refreshes from Drive: 0 turns it off, anything else is
+// at least 30 seconds.
 func (a *App) UpdateSettings(syncIntervalSecs int, theme string, autoSaveDelaySecs int) (*models.Settings, error) {
+	if syncIntervalSecs < 0 {
+		syncIntervalSecs = 0
+	} else if syncIntervalSecs > 0 && syncIntervalSecs < 30 {
+		syncIntervalSecs = 30
+	}
+	if autoSaveDelaySecs < 1 {
+		autoSaveDelaySecs = 1
+	}
 	s := models.Settings{
 		SyncIntervalSecs:  syncIntervalSecs,
 		Theme:             theme,

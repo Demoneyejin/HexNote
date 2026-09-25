@@ -40,6 +40,7 @@ async function closeBrowser() {
 // open() starts a fresh page. `seed` preloads mock state (auth, workspaces,
 // docs, settings, revisions). The returned page has pageerror tracking in
 // page.__errors so tests can assert no uncaught exceptions happened.
+// opts.clock installs Playwright's fake clock (drive it with page.clock).
 async function open(seed, opts) {
     opts = opts || {};
     const b = await getBrowser();
@@ -64,6 +65,7 @@ async function open(seed, opts) {
         });
     });
 
+    if (opts.clock) await page.clock.install();
     await page.addInitScript((s) => { window.__HEXNOTE_SEED = s; }, seed || {});
     if (opts.beforeMock) await page.addInitScript(opts.beforeMock);
     await page.addInitScript({ path: MOCK });

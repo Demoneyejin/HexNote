@@ -71,6 +71,12 @@ func (ta *testApp) connect(t *testing.T, ts oauth2.TokenSource) {
 	ta.setDrive(client)
 }
 
+// refresh runs TriggerSync and returns only its error.
+func (ta *testApp) refresh() error {
+	_, err := ta.TriggerSync()
+	return err
+}
+
 // disconnect simulates being offline / signed out.
 func (ta *testApp) disconnect() {
 	ta.setDrive(nil)
@@ -156,7 +162,7 @@ func TestDeletePublishedPageTrashesDriveFile(t *testing.T) {
 	if f := ta.fake.Get(doc.DriveFileID); f == nil || !f.Trashed {
 		t.Fatalf("Drive file should be trashed, got %+v", f)
 	}
-	if err := ta.TriggerSync(); err != nil {
+	if err := ta.refresh(); err != nil {
 		t.Fatalf("TriggerSync: %v", err)
 	}
 	if contains(ta.titles(t), "Roadmap") {
@@ -182,7 +188,7 @@ func TestDeleteFolderTrashesFolderOnce(t *testing.T) {
 	if ta.fake.Get(child.DriveFileID).Trashed {
 		t.Error("child should not be trashed separately (trashing the folder covers it)")
 	}
-	ta.TriggerSync()
+	ta.refresh()
 	if len(ta.titles(t)) != 0 {
 		t.Fatalf("folder contents came back: %v", ta.titles(t))
 	}
@@ -226,7 +232,7 @@ func TestDeleteWhileOfflineRecordsTombstoneAndRetries(t *testing.T) {
 
 	// Back online: the refresh must skip the file and retry the trash.
 	ta.setDrive(client)
-	if err := ta.TriggerSync(); err != nil {
+	if err := ta.refresh(); err != nil {
 		t.Fatalf("TriggerSync: %v", err)
 	}
 	if contains(ta.titles(t), "Offline") {
@@ -252,7 +258,7 @@ func TestDeleteWithoutPermissionKeepsTombstone(t *testing.T) {
 	if n := ta.notifications(); len(n) != 1 || !strings.Contains(n[0], "permission") {
 		t.Errorf("expected a permission notification, got %v", n)
 	}
-	if err := ta.TriggerSync(); err != nil {
+	if err := ta.refresh(); err != nil {
 		t.Fatalf("TriggerSync: %v", err)
 	}
 	if contains(ta.titles(t), "Theirs") {
@@ -298,7 +304,7 @@ func TestRefreshRemovesPagesTrashedByTeammate(t *testing.T) {
 	ta.fake.Files[edited.DriveFileID].Trashed = true
 	ta.fake.Mu.Unlock()
 
-	if err := ta.TriggerSync(); err != nil {
+	if err := ta.refresh(); err != nil {
 		t.Fatalf("TriggerSync: %v", err)
 	}
 	titles := ta.titles(t)
@@ -335,7 +341,7 @@ func TestRefreshWithFailedSubfolderListingDeletesNothing(t *testing.T) {
 	folderDoc, _ := ta.GetDocument(folder.ID)
 
 	ta.fake.FailFor["'"+folderDoc.DriveFileID+"' in parents"] = 503
-	if err := ta.TriggerSync(); err == nil {
+	if err := ta.refresh(); err == nil {
 		t.Fatal("expected refresh error when a subfolder cannot be listed")
 	}
 	if !contains(ta.titles(t), "Design/Inside") {
@@ -377,7 +383,7 @@ func TestRevokedTokenExpiresSessionOnDriveCall(t *testing.T) {
 	ta.signIn(t)
 	ta.connect(t, revokedTokenSource{})
 
-	err := ta.TriggerSync()
+	err := ta.refresh()
 	if err == nil || !strings.HasPrefix(err.Error(), "ERR_AUTH:") {
 		t.Fatalf("TriggerSync error = %v, want ERR_AUTH prefix", err)
 	}
@@ -443,7 +449,7 @@ func TestGetAuthStatusOfflineStaysSignedIn(t *testing.T) {
 	if !ta.authMgr.HasValidToken() {
 		t.Error("offline must not clear the token")
 	}
-	if err := ta.TriggerSync(); err == nil || !strings.HasPrefix(err.Error(), "ERR_OFFLINE:") {
+	if err := ta.refresh(); err == nil || !strings.HasPrefix(err.Error(), "ERR_OFFLINE:") {
 		t.Errorf("TriggerSync offline = %v, want ERR_OFFLINE", err)
 	}
 	if ta.client() == nil {
@@ -518,7 +524,7 @@ func TestRenameFolderOfflineBecomesDraftThenPublishes(t *testing.T) {
 
 	// A refresh must not undo the pending local rename.
 	ta.setDrive(client)
-	if err := ta.TriggerSync(); err != nil {
+	if err := ta.refresh(); err != nil {
 		t.Fatal(err)
 	}
 	if d, _ := ta.GetDocument(folder.ID); d.Title != "Art Direction" {
@@ -576,7 +582,7 @@ func TestRefreshPicksUpTeammateFolderRename(t *testing.T) {
 	ta.fake.Files[folder.DriveFileID].Name = "Renamed by Sam"
 	ta.fake.Mu.Unlock()
 
-	if err := ta.TriggerSync(); err != nil {
+	if err := ta.refresh(); err != nil {
 		t.Fatal(err)
 	}
 	if d, _ := ta.GetDocument(folder.ID); d.Title != "Renamed by Sam" || d.Status != "published" {
@@ -611,5 +617,44 @@ func TestErrorPrefixes(t *testing.T) {
 	}
 	if err := ta.ImportCredentials(`{"web":{"client_id":"x"}}`); err == nil || !strings.HasPrefix(err.Error(), "ERR_INVALID:") {
 		t.Errorf("web client JSON = %v, want ERR_INVALID", err)
+	}
+}
+
+// === Item 8: refresh reports what changed ===
+
+func TestTriggerSyncSummary(t *testing.T) {
+	ta := newTestApp(t)
+	sum, err := ta.TriggerSync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Updated)+len(sum.Removed)+len(sum.Detached) != 0 {
+		t.Errorf("empty workspace refresh should change nothing, got %+v", sum)
+	}
+
+	ta.fake.Put("", "From Sam.md", "text/plain", "root-folder", "# Hi\n")
+	sum, err = ta.TriggerSync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Updated) != 1 {
+		t.Errorf("want 1 updated page, got %+v", sum)
+	}
+	sum, _ = ta.TriggerSync()
+	if len(sum.Updated) != 0 {
+		t.Errorf("second refresh should be quiet, got %+v", sum)
+	}
+}
+
+func TestUpdateSettingsClampsInterval(t *testing.T) {
+	ta := newTestApp(t)
+	for _, tc := range []struct{ in, want int }{{-5, 0}, {0, 0}, {10, 30}, {300, 300}} {
+		s, err := ta.UpdateSettings(tc.in, "system", 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.SyncIntervalSecs != tc.want {
+			t.Errorf("UpdateSettings(%d) stored %d, want %d", tc.in, s.SyncIntervalSecs, tc.want)
+		}
 	}
 }

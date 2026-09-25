@@ -16,7 +16,7 @@ type Settings struct {
 
 func DefaultSettings() Settings {
 	return Settings{
-		SyncIntervalSecs:  60,
+		SyncIntervalSecs:  120,
 		Theme:             "system",
 		AutoSaveDelaySecs: 2,
 	}
@@ -61,6 +61,13 @@ type AuthStatus struct {
 	// Offline is set when the sign-in could not be checked because Google
 	// was unreachable; the user stays signed in.
 	Offline bool `json:"offline,omitempty"`
+}
+
+// SyncSummary reports what one refresh from Drive changed on this PC.
+type SyncSummary struct {
+	Updated  []string `json:"updated"`  // pages created or updated from Drive
+	Removed  []string `json:"removed"`  // pages deleted here because they were deleted on Drive
+	Detached []string `json:"detached"` // pages deleted on Drive but kept here as drafts (local edits)
 }
 
 // SyncStatus represents the current sync state

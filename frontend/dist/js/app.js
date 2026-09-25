@@ -19,6 +19,10 @@
     var currentDocMeta = null;  // { status, driveFileId } of the open page, for the status line
     var saveState = 'saved';    // 'saved' | 'unsaved' | 'saving' | 'error'
     var draftHintDismissed = true; // loaded from UI state at startup
+    var syncIntervalSecs = 120;  // auto-refresh period; 0 = off
+    var refreshTimer = null;
+    var lastRefreshAt = 0;
+    var refreshInFlight = null;  // promise of the running refresh, if any
 
     // === View Management ===
     var ALL_VIEWS = ['view-credentials', 'view-signin', 'view-path-choice', 'view-workspaces', 'view-onboarding', 'view-join', 'view-editor'];
@@ -290,8 +294,12 @@
                 if (settings.autoSaveDelaySecs > 0) {
                     autoSaveDelay = settings.autoSaveDelaySecs * 1000;
                 }
+                if (typeof settings.syncIntervalSecs === 'number') syncIntervalSecs = settings.syncIntervalSecs;
             }
         } catch (e) { /* ignore — settings not critical for boot */ }
+        scheduleAutoRefresh();
+        // Coming back to the window is when a teammate's changes matter most.
+        window.addEventListener('focus', function () { autoRefresh('focus'); });
 
         try {
             draftHintDismissed = (await window.go.main.App.GetUIState('draft-hint-dismissed')) === '1';
@@ -449,11 +457,17 @@
             window.runtime.EventsOn('settings:changed', function (s) {
                 if (s && s.theme) applyTheme(s.theme);
                 if (s && s.autoSaveDelaySecs > 0) autoSaveDelay = s.autoSaveDelaySecs * 1000;
+                if (s && typeof s.syncIntervalSecs === 'number') { syncIntervalSecs = s.syncIntervalSecs; scheduleAutoRefresh(); }
             });
 
             // Refresh tree when sync pulls new published pages
-            window.runtime.EventsOn('sync:docs-updated', function () {
-                loadTree();
+            // The open page is reloaded only when it has no local edits: a draft
+            // is never overwritten (the backend does not touch drafts either).
+            window.runtime.EventsOn('sync:docs-updated', async function (ids) {
+                await loadTree();
+                if (currentDocId && (ids || []).indexOf(currentDocId) >= 0 && isOpenPageClean()) {
+                    await reloadCurrentDoc();
+                }
             });
 
             // A teammate deleted pages on Drive: they are gone here too, except
@@ -664,7 +678,7 @@
             document.getElementById('empty-state').classList.remove('hidden');
             await loadTree();
             // Pull published pages from Drive
-            triggerSync();
+            triggerSync({ quiet: true });
         } catch (e) {
             showError('open the workspace', e);
         }
@@ -1116,7 +1130,7 @@
             showWorkspacesView(workspaces);
         });
 
-        document.getElementById('btn-sync').addEventListener('click', triggerSync);
+        document.getElementById('btn-sync').addEventListener('click', function () { triggerSync(); });
         document.getElementById('btn-publish').addEventListener('click', publishCurrentDoc);
 
         document.getElementById('btn-share').addEventListener('click', function () {
@@ -1134,21 +1148,86 @@
     }
 
     // === Sync & Publish ===
-    async function triggerSync() {
+    // triggerSync pulls published pages from Drive. opts.quiet (automatic
+    // refreshes) shows a toast only when something changed and reports
+    // failures in the status bar instead of a toast. Concurrent calls share
+    // one refresh.
+    function triggerSync(opts) {
+        var quiet = !!(opts && opts.quiet === true);
+        if (refreshInFlight) return refreshInFlight;
+        refreshInFlight = runRefresh(quiet).finally(function () { refreshInFlight = null; });
+        return refreshInFlight;
+    }
+
+    async function runRefresh(quiet) {
         var syncBtn = document.getElementById('btn-sync');
         var statusEl = document.getElementById('sync-status-text');
+        // Save pending typing first: a saved edit makes the page a draft, and
+        // a refresh never overwrites drafts.
+        if (currentDocId && window.__hexnoteHasUnsaved) await saveNow();
+        lastRefreshAt = Date.now();
         syncBtn.classList.add('syncing');
         statusEl.textContent = 'Refreshing from Drive\u2026';
         try {
-            await window.go.main.App.TriggerSync();
+            var sum = await window.go.main.App.TriggerSync();
+            var updated = (sum && sum.updated) || [];
             statusEl.textContent = 'Refreshed from Drive at ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            showToast('Refreshed from Drive', 'success');
             await loadTree();
+            if (updated.length) {
+                showToast(updated.length === 1 ? '1 page updated from Drive' : updated.length + ' pages updated from Drive', 'info');
+            } else if (!quiet && !((sum && sum.removed && sum.removed.length) || (sum && sum.detached && sum.detached.length))) {
+                showToast('Already up to date', 'success', 2500);
+            }
         } catch (e) {
-            statusEl.textContent = 'Couldn\u2019t refresh from Drive';
-            showError('refresh from Drive', e, triggerSync);
+            if (quiet) {
+                console.error('[auto-refresh]', errorMessage(e));
+                statusEl.textContent = errorCode(e) === 'ERR_OFFLINE'
+                    ? 'Offline. Your pages are saved on this PC.'
+                    : 'Couldn\u2019t refresh from Drive';
+            } else {
+                statusEl.textContent = 'Couldn\u2019t refresh from Drive';
+                showError('refresh from Drive', e, triggerSync);
+            }
         } finally {
             syncBtn.classList.remove('syncing');
+        }
+    }
+
+    // scheduleAutoRefresh (re)starts the periodic refresh timer.
+    function scheduleAutoRefresh() {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+        if (syncIntervalSecs > 0) {
+            refreshTimer = setInterval(function () { autoRefresh('timer'); }, syncIntervalSecs * 1000);
+        }
+    }
+
+    // autoRefresh refreshes quietly while a workspace is open. Focus-triggered
+    // refreshes are throttled to one a minute.
+    function autoRefresh(reason) {
+        if (currentView() !== 'view-editor' || !activeWorkspace) return;
+        if (reason === 'focus' && Date.now() - lastRefreshAt < 60000) return;
+        triggerSync({ quiet: true });
+    }
+
+    function isOpenPageClean() {
+        return !window.__hexnoteHasUnsaved && saveState === 'saved' &&
+            !!currentDocMeta && currentDocMeta.status === 'published';
+    }
+
+    // reloadCurrentDoc shows the stored version of the open page (after a
+    // teammate's change came in from Drive).
+    async function reloadCurrentDoc() {
+        var id = currentDocId;
+        try {
+            var doc = await window.go.main.App.GetDocument(id);
+            if (id !== currentDocId || !isOpenPageClean()) return; // user moved on or started typing
+            document.getElementById('doc-title').value = doc.title;
+            editor.commands.setContent(doc.content || '', { emitUpdate: false });
+            markClean(doc.title);
+            setDocMeta(doc);
+        } catch (e) {
+            console.error('reloadCurrentDoc:', errorMessage(e));
         }
     }
 
@@ -1321,7 +1400,7 @@
                 'Restore'))) return;
             try {
                 var doc = await window.go.main.App.RestoreVersion(currentDocId, selectedRevisionId);
-                editor.commands.setContent(doc.content || '');
+                editor.commands.setContent(doc.content || '', { emitUpdate: false });
                 document.getElementById('doc-title').value = doc.title;
                 markClean(doc.title);
                 document.getElementById('history-modal').classList.add('hidden');
@@ -1341,6 +1420,7 @@
                 var s = await window.go.main.App.GetSettings();
                 document.getElementById('setting-theme').value = s.theme || 'system';
                 document.getElementById('setting-autosave').value = s.autoSaveDelaySecs || 2;
+                document.getElementById('setting-sync-interval').value = s.syncIntervalSecs;
                 document.getElementById('settings-modal').classList.remove('hidden');
             } catch (e) {
                 showError('open settings', e);
@@ -1360,10 +1440,14 @@
         document.getElementById('btn-save-settings').addEventListener('click', async function () {
             var theme = document.getElementById('setting-theme').value;
             var autosave = parseInt(document.getElementById('setting-autosave').value) || 2;
+            var interval = parseInt(document.getElementById('setting-sync-interval').value, 10);
+            if (isNaN(interval) || interval < 0) interval = 120;
             try {
-                await window.go.main.App.UpdateSettings(0, theme, autosave);
+                var saved = await window.go.main.App.UpdateSettings(interval, theme, autosave);
                 applyTheme(theme);
                 autoSaveDelay = autosave * 1000;
+                syncIntervalSecs = saved && typeof saved.syncIntervalSecs === 'number' ? saved.syncIntervalSecs : interval;
+                scheduleAutoRefresh();
                 document.getElementById('settings-modal').classList.add('hidden');
                 showToast('Settings saved', 'success');
             } catch (e) {
@@ -1517,7 +1601,7 @@
         try {
             var doc = await window.go.main.App.GetDocument(id);
             document.getElementById('doc-title').value = doc.title;
-            editor.commands.setContent(doc.content || '');
+            editor.commands.setContent(doc.content || '', { emitUpdate: false });
             // Compare future edits against the serializer's own output, not the
             // raw file: TipTap's markdown round-trip is not byte-identical
             // (blank lines after lists/tables, escaping), so comparing against
