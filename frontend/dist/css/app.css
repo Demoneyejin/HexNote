@@ -438,6 +438,27 @@ html, body {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
+}
+
+/* The title gives way to the status line and buttons in narrow windows. */
+.doc-title {
+    min-width: 120px;
+    text-overflow: ellipsis;
+}
+
+#btn-publish {
+    white-space: nowrap;
+}
+
+/* At the minimum window width, drop the "· ..." half of the status line;
+   the full text stays in its tooltip. */
+@media (max-width: 1040px) {
+    .save-status {
+        max-width: 190px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
 }
 
 .save-status {
@@ -2118,4 +2139,64 @@ html, body {
 
 .toast-action:hover {
     background: rgba(255, 255, 255, 0.3);
+}
+
+/* ========================================
+   Page status line and draft hint
+   ======================================== */
+
+.save-status {
+    cursor: default;
+    white-space: nowrap;
+}
+
+.save-status.published {
+    color: #16a34a;
+}
+
+.save-status.published::before {
+    background: #16a34a;
+}
+
+.save-status.draft {
+    color: var(--text-secondary);
+}
+
+.save-status.draft::before {
+    background: var(--text-muted);
+}
+
+.save-status.modified {
+    color: #b45309;
+}
+
+.save-status.modified::before {
+    background: #d97706;
+}
+
+.draft-hint {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 12px 24px 0;
+    padding: 8px 12px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    background: var(--sidebar-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.draft-hint.hidden {
+    display: none;
+}
+
+.draft-hint span {
+    flex: 1;
+}
+
+.draft-hint-dismiss {
+    flex-shrink: 0;
+    font-size: 13px;
 }

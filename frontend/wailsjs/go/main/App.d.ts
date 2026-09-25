@@ -36,6 +36,8 @@ export function GetSettings():Promise<models.Settings>;
 
 export function GetSyncStatus():Promise<models.SyncStatus>;
 
+export function GetUIState(arg1:string):Promise<string>;
+
 export function GetVersionHistory(arg1:string):Promise<Array<models.Revision>>;
 
 export function GetWorkspaceMembers(arg1:string):Promise<Array<models.WorkspaceMember>>;
@@ -69,6 +71,8 @@ export function SearchDocuments(arg1:string):Promise<Array<models.SearchResult>>
 export function SearchSharedFolders(arg1:string):Promise<Array<models.DriveFolder>>;
 
 export function SetDocumentLabels(arg1:string,arg2:Array<string>):Promise<void>;
+
+export function SetUIState(arg1:string,arg2:string):Promise<void>;
 
 export function ShareWorkspace(arg1:string,arg2:string,arg3:string):Promise<void>;
 

@@ -926,6 +926,31 @@ func (a *App) UpdateSettings(syncIntervalSecs int, theme string, autoSaveDelaySe
 	return &s, nil
 }
 
+// === UI state ===
+
+// uiKeyRe limits the keys the frontend may read and write to small UI flags
+// (for example a dismissed hint), stored in the settings table as "ui.<key>".
+var uiKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,40}$`)
+
+// GetUIState returns a stored UI flag ("" when unset).
+func (a *App) GetUIState(key string) (string, error) {
+	if !uiKeyRe.MatchString(key) {
+		return "", fmt.Errorf("ERR_INVALID: bad UI state key")
+	}
+	return a.db.GetSetting("ui." + key)
+}
+
+// SetUIState stores a UI flag. Values are capped at 1 KB.
+func (a *App) SetUIState(key, value string) error {
+	if !uiKeyRe.MatchString(key) {
+		return fmt.Errorf("ERR_INVALID: bad UI state key")
+	}
+	if len(value) > 1024 {
+		return fmt.Errorf("ERR_INVALID: UI state value too long")
+	}
+	return a.db.SetSetting("ui."+key, value)
+}
+
 // === Image Upload ===
 
 func (a *App) UploadImage(base64Data string, filename string) (string, error) {

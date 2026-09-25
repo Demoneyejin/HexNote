@@ -16,6 +16,9 @@
     var selectedRevisionId = null;
     var lastKnownContent = '';  // serializer output for the last content loaded/saved — prevents auto-save from re-dirtying unchanged docs
     var lastKnownTitle = '';    // title as last loaded/saved — a title-only edit must still reach the backend
+    var currentDocMeta = null;  // { status, driveFileId } of the open page, for the status line
+    var saveState = 'saved';    // 'saved' | 'unsaved' | 'saving' | 'error'
+    var draftHintDismissed = true; // loaded from UI state at startup
 
     // === View Management ===
     var ALL_VIEWS = ['view-credentials', 'view-signin', 'view-path-choice', 'view-workspaces', 'view-onboarding', 'view-join', 'view-editor'];
@@ -289,6 +292,10 @@
                 }
             }
         } catch (e) { /* ignore — settings not critical for boot */ }
+
+        try {
+            draftHintDismissed = (await window.go.main.App.GetUIState('draft-hint-dismissed')) === '1';
+        } catch (e) { draftHintDismissed = false; }
 
         updateEditorDarkMode();
         await routeToCorrectView();
@@ -1118,6 +1125,12 @@
         });
 
         document.getElementById('btn-history').addEventListener('click', openVersionHistory);
+
+        document.getElementById('btn-dismiss-draft-hint').addEventListener('click', function () {
+            draftHintDismissed = true;
+            renderDocStatus();
+            window.go.main.App.SetUIState('draft-hint-dismissed', '1').catch(function (e) { console.error('SetUIState:', errorMessage(e)); });
+        });
     }
 
     // === Sync & Publish ===
@@ -1125,14 +1138,14 @@
         var syncBtn = document.getElementById('btn-sync');
         var statusEl = document.getElementById('sync-status-text');
         syncBtn.classList.add('syncing');
-        statusEl.textContent = 'Refreshing...';
+        statusEl.textContent = 'Refreshing from Drive\u2026';
         try {
             await window.go.main.App.TriggerSync();
-            statusEl.textContent = 'Up to date';
+            statusEl.textContent = 'Refreshed from Drive at ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             showToast('Refreshed from Drive', 'success');
             await loadTree();
         } catch (e) {
-            statusEl.textContent = 'Refresh error';
+            statusEl.textContent = 'Couldn\u2019t refresh from Drive';
             showError('refresh from Drive', e, triggerSync);
         } finally {
             syncBtn.classList.remove('syncing');
@@ -1145,10 +1158,10 @@
         btn.disabled = true;
         btn.textContent = 'Publishing...';
         try {
-            if (await publishDocument(currentDocId)) btn.style.display = 'none';
+            await publishDocument(currentDocId);
         } finally {
             btn.disabled = false;
-            btn.textContent = 'Publish';
+            renderDocStatus();
         }
     }
 
@@ -1158,6 +1171,7 @@
         if (id === currentDocId) await saveNow();
         try {
             var doc = await window.go.main.App.PublishDocument(id);
+            if (id === currentDocId) setDocMeta(doc);
             showToast(doc && doc.isFolder ? 'Folder published to Drive' : 'Published to Drive', 'success');
             await loadTree();
             return true;
@@ -1178,9 +1192,7 @@
             if (isCurrent) {
                 document.getElementById('doc-title').value = updated.title;
                 lastKnownTitle = updated.title;
-                var publishBtn = document.getElementById('btn-publish');
-                publishBtn.style.display = updated.status === 'draft' ? '' : 'none';
-                publishBtn.textContent = updated.driveFileId ? 'Publish Changes' : 'Publish';
+                setDocMeta(updated);
             }
             if (updated.isFolder && updated.driveFileId && updated.status === 'draft') {
                 showToast('Renamed on this PC. Publish the folder to rename it on Drive.', 'warning', 6000);
@@ -1313,8 +1325,9 @@
                 document.getElementById('doc-title').value = doc.title;
                 markClean(doc.title);
                 document.getElementById('history-modal').classList.add('hidden');
+                setDocMeta(doc);
+                setSaveStatus('saved');
                 showToast('Version restored', 'success');
-                setSaveStatus('Saved');
             } catch (e) {
                 showError('restore this version', e);
             }
@@ -1514,15 +1527,8 @@
             document.getElementById('empty-state').classList.add('hidden');
             window.__hexnoteHasUnsaved = false;
             clearTimeout(saveTimeout);
-            setSaveStatus('Saved');
-            // Show publish button for draft documents
-            var publishBtn = document.getElementById('btn-publish');
-            if (doc.status === 'draft') {
-                publishBtn.style.display = '';
-                publishBtn.textContent = doc.driveFileId ? 'Publish Changes' : 'Publish';
-            } else {
-                publishBtn.style.display = 'none';
-            }
+            saveState = 'saved';
+            setDocMeta(doc);
             renderTree();
         } catch (e) { console.error('selectDocument error:', e); }
     }
@@ -1611,13 +1617,7 @@
     function onEditorChange() {
         if (!currentDocId) return;
         window.__hexnoteHasUnsaved = true;
-        setSaveStatus('Unsaved');
-        // Show publish button immediately on first edit — don't wait for save
-        var publishBtn = document.getElementById('btn-publish');
-        if (publishBtn && publishBtn.style.display === 'none') {
-            publishBtn.style.display = '';
-            publishBtn.textContent = 'Publish Changes';
-        }
+        setSaveStatus('unsaved');
         clearTimeout(saveTimeout);
         saveTimeout = setTimeout(saveNow, autoSaveDelay);
     }
@@ -1625,7 +1625,7 @@
     function onTitleChange() {
         if (!currentDocId) return;
         window.__hexnoteHasUnsaved = true;
-        setSaveStatus('Unsaved');
+        setSaveStatus('unsaved');
         clearTimeout(saveTimeout);
         saveTimeout = setTimeout(saveNow, autoSaveDelay);
     }
@@ -1655,35 +1655,73 @@
         // that was just updated by sync, without dropping title-only edits.
         if (content === lastKnownContent && title === lastKnownTitle) {
             window.__hexnoteHasUnsaved = false;
-            setSaveStatus('Saved');
+            setSaveStatus('saved');
             return;
         }
-        setSaveStatus('Saving...');
+        setSaveStatus('saving');
         try {
             var doc = await window.go.main.App.UpdateDocument(currentDocId, title, content);
             lastKnownContent = content;
             lastKnownTitle = title;
             window.__hexnoteHasUnsaved = false;
-            setSaveStatus('Saved');
-            // Editing sets status to 'draft' — show the Publish button
-            var publishBtn = document.getElementById('btn-publish');
-            if (doc && doc.status === 'draft') {
-                publishBtn.style.display = '';
-                publishBtn.textContent = doc.driveFileId ? 'Publish Changes' : 'Publish';
-            }
+            if (doc && doc.id === currentDocId) currentDocMeta = { status: doc.status, driveFileId: doc.driveFileId || '' };
+            setSaveStatus('saved');
             await loadTree();
-        } catch (e) { console.error('save error:', e); setSaveStatus('Error'); }
+        } catch (e) { console.error('save error:', errorMessage(e)); setSaveStatus('error'); }
     }
 
-    function setSaveStatus(text) {
+    function setSaveStatus(state) {
+        saveState = state;
+        renderDocStatus();
+    }
+
+    // setDocMeta records the open page's publish state and redraws the header.
+    function setDocMeta(doc) {
+        currentDocMeta = doc ? { status: doc.status, driveFileId: doc.driveFileId || '' } : null;
+        renderDocStatus();
+    }
+
+    // renderDocStatus draws the one status line that says where the open page
+    // lives, and shows the Publish button when there is something to publish.
+    //   Saved on this PC · not published   (draft, never published)
+    //   Published · edits not published    (published before, local changes since)
+    //   Published · up to date             (Drive has exactly this)
+    //   Saving… / Unsaved changes / Couldn't save
+    function renderDocStatus() {
         var el = document.getElementById('save-status');
+        var btn = document.getElementById('btn-publish');
+        var meta = currentDocMeta || { status: 'draft', driveFileId: '' };
+        var onDrive = !!meta.driveFileId;
+        var pendingEdits = saveState === 'unsaved' || saveState === 'saving';
+        var needsPublish = meta.status === 'draft' || pendingEdits;
+        var text, cls, tip;
+
+        if (saveState === 'saving') {
+            text = 'Saving\u2026'; cls = 'saving'; tip = 'Saving on this PC';
+        } else if (saveState === 'unsaved') {
+            text = 'Unsaved changes'; cls = 'unsaved'; tip = 'Saved on this PC automatically in a moment (Ctrl+S saves now)';
+        } else if (saveState === 'error') {
+            text = 'Couldn\u2019t save'; cls = 'error'; tip = 'Saving on this PC failed. Your text is still in the editor; press Ctrl+S to try again.';
+        } else if (!onDrive) {
+            text = 'Saved on this PC \u00b7 not published'; cls = 'draft';
+            tip = 'Only you can see this page. Publish puts it on Google Drive for your team.';
+        } else if (meta.status === 'draft') {
+            text = 'Published \u00b7 edits not published'; cls = 'modified';
+            tip = 'Teammates see the last published version. Publish Changes sends your edits to Google Drive.';
+        } else {
+            text = 'Published \u00b7 up to date'; cls = 'published';
+            tip = 'Google Drive has this version. Teammates see it when they refresh.';
+        }
         el.textContent = text;
-        var cls = 'save-status';
-        if (text === 'Saved') cls += ' saved';
-        else if (text === 'Error') cls += ' error';
-        else if (text === 'Saving...') cls += ' saving';
-        else if (text === 'Unsaved') cls += ' unsaved';
-        el.className = cls;
+        el.title = tip;
+        el.className = 'save-status ' + cls;
+
+        btn.style.display = needsPublish ? '' : 'none';
+        if (!btn.disabled) btn.textContent = onDrive ? 'Publish Changes' : 'Publish';
+        btn.title = onDrive ? 'Send your edits to Google Drive (Ctrl+Shift+P)' : 'Put this page on Google Drive for your team (Ctrl+Shift+P)';
+
+        // One-time hint explaining drafts, shown on unpublished pages until dismissed.
+        document.getElementById('draft-hint').classList.toggle('hidden', draftHintDismissed || onDrive || !currentDocId);
     }
 
     async function doSearch() {

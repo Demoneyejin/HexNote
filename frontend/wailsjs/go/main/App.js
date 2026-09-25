@@ -70,6 +70,10 @@ export function GetSyncStatus() {
   return window['go']['main']['App']['GetSyncStatus']();
 }
 
+export function GetUIState(arg1) {
+  return window['go']['main']['App']['GetUIState'](arg1);
+}
+
 export function GetVersionHistory(arg1) {
   return window['go']['main']['App']['GetVersionHistory'](arg1);
 }
@@ -136,6 +140,10 @@ export function SearchSharedFolders(arg1) {
 
 export function SetDocumentLabels(arg1, arg2) {
   return window['go']['main']['App']['SetDocumentLabels'](arg1, arg2);
+}
+
+export function SetUIState(arg1, arg2) {
+  return window['go']['main']['App']['SetUIState'](arg1, arg2);
 }
 
 export function ShareWorkspace(arg1, arg2, arg3) {

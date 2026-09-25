@@ -34,6 +34,7 @@
             { id: 'm2', workspaceId: 'ws-1', email: 'sam@example.com', role: 'writer', displayName: 'Sam', permissionId: 'p2' },
         ],
         revisions: clone(seed.revisions) || {},
+        ui: clone(seed.ui) || {},
         syncResult: [],          // doc IDs TriggerSync reports as updated
         syncMutations: null,     // optional function run inside TriggerSync
     };
@@ -227,6 +228,10 @@
             d.content = content; d.status = 'draft';
             return clone(d);
         },
+
+        // --- UI state ---
+        GetUIState: function (key) { return (S.ui || {})[key] || ''; },
+        SetUIState: function (key, value) { S.ui = S.ui || {}; S.ui[key] = value; return null; },
 
         // --- misc ---
         ExportWorkspace: function () { return '/tmp/export'; },

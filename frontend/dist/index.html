@@ -173,7 +173,7 @@
                         <h1 class="app-title" id="workspace-title">Workspace</h1>
                     </div>
                     <div class="sidebar-actions">
-                        <button id="btn-sync" class="btn-icon" title="Sync with Drive">
+                        <button id="btn-sync" class="btn-icon" title="Refresh from Drive: get pages your teammates published">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8a6 6 0 0110.89-3.48M14 8a6 6 0 01-10.89 3.48" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M14 2v4h-4M2 14v-4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </button>
                         <button id="btn-share" class="btn-icon" title="Share Workspace">
@@ -215,10 +215,14 @@
                 </div>
 
                 <div id="editor-container" class="editor-container hidden">
+                    <div id="draft-hint" class="draft-hint hidden" role="note">
+                        <span>Pages stay on this PC until you <strong>Publish</strong>. Teammates see published pages when they <strong>Refresh</strong>.</span>
+                        <button id="btn-dismiss-draft-hint" class="btn-link draft-hint-dismiss">Got it</button>
+                    </div>
                     <div class="editor-header">
                         <input type="text" id="doc-title" class="doc-title" placeholder="Untitled">
                         <div class="editor-meta">
-                            <span id="save-status" class="save-status">Saved</span>
+                            <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
                             <button id="btn-publish" class="btn-primary btn-small" title="Publish to Drive" style="display:none;">Publish</button>
                             <button id="btn-history" class="btn-icon" title="Version History">
                                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
