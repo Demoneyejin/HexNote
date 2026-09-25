@@ -225,6 +225,11 @@
             impl.DiscardLocalChanges(id);
             return clone(S.docs[copy.id]);
         },
+        KeepEditBase: function (id, base) {
+            var d = requireDoc(id);
+            if (d.status === 'draft' && d.driveModifiedAt && base < d.driveModifiedAt) d.driveModifiedAt = base;
+            return null;
+        },
         GetSyncStatus: function () { return { state: 'idle', message: 'Up to date' }; },
 
         // --- sharing ---

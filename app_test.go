@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"hexnote/internal/drive"
 	"hexnote/internal/drive/drivefake"
@@ -1164,5 +1165,37 @@ func TestSuccessfulDeleteLeavesNoTombstone(t *testing.T) {
 	ta.DeleteDocument(doc.ID)
 	if ids, _ := ta.db.GetDeletedDriveFiles(ta.ws.ID); len(ids) != 0 {
 		t.Errorf("tombstones = %v, want none after a successful trash", ids)
+	}
+}
+
+// Unsaved typing on the open page when a refresh brings a teammate's newer
+// version: the frontend saves the typing and calls KeepEditBase, and the
+// next Publish must report a conflict rather than replace their text.
+func TestKeepEditBaseMakesPublishReportConflict(t *testing.T) {
+	ta := newTestApp(t)
+	doc := ta.newPublishedPage(t, "Roadmap", "v1\n", "")
+	loaded, _ := ta.GetDocument(doc.ID)
+	base := loaded.DriveModifiedAt.Format(time.RFC3339Nano)
+
+	ta.fake.Edit(doc.DriveFileID, "Sam's version\n", "Sam")
+	if err := ta.refresh(); err != nil { // pulls Sam's text, advances DriveModifiedAt
+		t.Fatal(err)
+	}
+	ta.UpdateDocument(doc.ID, "Roadmap", "my typing based on v1\n")
+	if err := ta.KeepEditBase(doc.ID, base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ta.PublishDocument(doc.ID); err == nil || !strings.HasPrefix(err.Error(), "ERR_CONFLICT:") {
+		t.Fatalf("publish = %v, want ERR_CONFLICT", err)
+	}
+	if got := string(ta.fake.Get(doc.DriveFileID).Content); got != "Sam's version\n" {
+		t.Errorf("Drive content = %q", got)
+	}
+	// KeepEditBase never moves the base forward.
+	if err := ta.KeepEditBase(doc.ID, time.Now().Add(time.Hour).Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ta.PublishDocument(doc.ID); err == nil {
+		t.Error("a later timestamp must not clear the conflict")
 	}
 }

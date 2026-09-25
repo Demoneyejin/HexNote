@@ -54,6 +54,8 @@ export function ImportCredentials(arg1:string):Promise<void>;
 
 export function KeepBothVersions(arg1:string):Promise<models.Document>;
 
+export function KeepEditBase(arg1:string,arg2:string):Promise<void>;
+
 export function ListDriveFolders(arg1:string):Promise<Array<models.DriveFolder>>;
 
 export function MoveDocument(arg1:string,arg2:string):Promise<models.Document>;

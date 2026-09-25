@@ -828,6 +828,26 @@ func (a *App) publish(docID string, force bool) (*models.Document, error) {
 	return a.db.GetDocument(docID)
 }
 
+// KeepEditBase records that the open page's unsaved edits were based on the
+// Drive version from driveModifiedAt (RFC 3339), after a refresh brought in
+// a newer one underneath them. Publish then reports the conflict instead of
+// silently replacing the newer version. Only moves the timestamp back, and
+// only for drafts.
+func (a *App) KeepEditBase(docID string, driveModifiedAt string) error {
+	doc, err := a.getValidatedDoc(docID)
+	if err != nil {
+		return err
+	}
+	base, err := time.Parse(time.RFC3339Nano, driveModifiedAt)
+	if err != nil {
+		return fmt.Errorf("ERR_INVALID: bad timestamp %q", driveModifiedAt)
+	}
+	if doc.Status != "draft" || doc.DriveModifiedAt == nil || !base.Before(*doc.DriveModifiedAt) {
+		return nil
+	}
+	return a.db.SetDriveModifiedAt(docID, base)
+}
+
 // DiscardLocalChanges replaces the local page with the current version on
 // Drive ("Load theirs" after a publish conflict). Unpublished local edits
 // are lost.

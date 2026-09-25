@@ -3,6 +3,7 @@ package storage
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestDeletedDriveFilesRoundTrip(t *testing.T) {
@@ -93,5 +94,27 @@ func TestDriveTrashRoots(t *testing.T) {
 	roots, _ = db.DriveTrashRoots(draft.ID)
 	if len(roots) != 0 {
 		t.Errorf("draft roots = %v, want none", roots)
+	}
+}
+
+func TestUpdatePublishedFromSyncSkipsDrafts(t *testing.T) {
+	db := newTestDB(t)
+	pub, _ := db.CreateDocument("Pub", "", "ws-1", false)
+	db.SetDocumentStatus(pub.ID, "published")
+	draft, _ := db.CreateDocument("Draft", "", "ws-1", false)
+	db.UpdateDocument(draft.ID, "Draft", "my typing")
+
+	now := time.Now().UTC().Truncate(time.Second)
+	if ok, err := db.UpdatePublishedFromSync(pub.ID, "Pub", "theirs", now); !ok || err != nil {
+		t.Fatalf("published page should update: %v %v", ok, err)
+	}
+	if ok, _ := db.UpdatePublishedFromSync(draft.ID, "Draft", "theirs", now); ok {
+		t.Fatal("a draft must not be overwritten")
+	}
+	if d, _ := db.GetDocument(draft.ID); d.Content != "my typing" {
+		t.Errorf("draft content = %q", d.Content)
+	}
+	if d, _ := db.GetDocument(pub.ID); d.Content != "theirs" || d.DriveModifiedAt == nil || !d.DriveModifiedAt.Equal(now) || d.IsDirty {
+		t.Errorf("published page = %+v", d)
 	}
 }

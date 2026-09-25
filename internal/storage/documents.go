@@ -446,6 +446,29 @@ func (d *Database) UpdateDocumentFromSync(id, title, content string) error {
 	return nil
 }
 
+// UpdatePublishedFromSync applies a newer Drive version to a document only
+// if it is still published, in one statement. A local edit saved while the
+// refresh was running (which makes the page a draft) is never overwritten.
+// Reports whether the document was updated.
+func (d *Database) UpdatePublishedFromSync(id, title, content string, driveModifiedAt time.Time) (bool, error) {
+	res, err := d.db.Exec(
+		`UPDATE documents SET title = ?, content = ?, updated_at = ?, drive_modified_at = ?, is_dirty = 0
+		 WHERE id = ? AND status = 'published'`,
+		title, content, formatTime(time.Now().UTC()), formatTime(driveModifiedAt), id,
+	)
+	if err != nil {
+		return false, fmt.Errorf("sync update document: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return false, nil
+	}
+	if doc, _ := d.GetDocument(id); doc != nil {
+		d.indexDocument(doc)
+	}
+	return true, nil
+}
+
 func (d *Database) SetDocumentStatus(docID, status string) error {
 	_, err := d.db.Exec("UPDATE documents SET status = ? WHERE id = ?", status, docID)
 	return err

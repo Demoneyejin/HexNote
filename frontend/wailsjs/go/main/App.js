@@ -106,6 +106,10 @@ export function KeepBothVersions(arg1) {
   return window['go']['main']['App']['KeepBothVersions'](arg1);
 }
 
+export function KeepEditBase(arg1, arg2) {
+  return window['go']['main']['App']['KeepEditBase'](arg1, arg2);
+}
+
 export function ListDriveFolders(arg1) {
   return window['go']['main']['App']['ListDriveFolders'](arg1);
 }

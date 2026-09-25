@@ -293,10 +293,12 @@ func (sm *SyncManager) pullFolder(run *pullRun, driveFolderID string, localParen
 					if err == nil {
 						title := strings.TrimSuffix(f.Name, ".md")
 						content = rewriteImagePaths(content, workspace.ID)
-						sm.db.UpdateDocumentFromSync(localDoc.ID, title, content)
-						sm.db.SetDriveModifiedAt(localDoc.ID, remoteTime)
-						sm.db.ClearDirty(localDoc.ID)
-						run.result.UpdatedIDs = append(run.result.UpdatedIDs, localDoc.ID)
+						// The tree was read when the refresh started; the user
+						// may have saved an edit since. Only a page that is
+						// still published takes the Drive version.
+						if ok, _ := sm.db.UpdatePublishedFromSync(localDoc.ID, title, content, remoteTime); ok {
+							run.result.UpdatedIDs = append(run.result.UpdatedIDs, localDoc.ID)
+						}
 					}
 				}
 			}

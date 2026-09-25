@@ -542,8 +542,23 @@
             // The open page is reloaded only when it has no local edits: a draft
             // is never overwritten (the backend does not touch drafts either).
             window.runtime.EventsOn('sync:docs-updated', async function (ids) {
+                var openChanged = currentDocId && (ids || []).indexOf(currentDocId) >= 0;
+                if (openChanged && !isOpenPageClean() && window.__hexnoteHasUnsaved) {
+                    // A teammate's version arrived under unsaved typing. Keep the
+                    // typing, and remember which version it was based on so
+                    // Publish asks before replacing theirs.
+                    var id = currentDocId;
+                    var base = currentDocMeta && currentDocMeta.driveModifiedAt;
+                    await saveNow();
+                    if (base) {
+                        try { await window.go.main.App.KeepEditBase(id, base); } catch (e) { console.error('KeepEditBase:', errorMessage(e)); }
+                    }
+                    showToast('A teammate published a newer version of this page while you were typing. Your text is kept; Publish will let you choose which version to keep.', 'warning', 9000);
+                    await loadTree();
+                    return;
+                }
                 await loadTree();
-                if (currentDocId && (ids || []).indexOf(currentDocId) >= 0 && isOpenPageClean()) {
+                if (openChanged && isOpenPageClean()) {
                     await reloadCurrentDoc();
                 }
             });
@@ -1729,7 +1744,7 @@
                     '<div><strong>' + escapeHtml(m.displayName || m.email) + '</strong>' +
                     (m.displayName ? '<br><span class="text-muted">' + escapeHtml(m.email) + '</span>' : '') +
                     '</div>' +
-                    '<span class="member-role">' + m.role + '</span>' +
+                    '<span class="member-role">' + escapeHtml(m.role) + '</span>' +
                     (m.role !== 'owner' ? '<button class="btn-icon btn-danger member-remove" data-email="' + escapeHtml(m.email) + '" title="Remove access" aria-label="Remove ' + escapeHtml(m.email) + '">&times;</button>' : '') +
                     '</div>';
             }).join('');
@@ -1779,7 +1794,7 @@
                 var user = r.lastModifyingUser || 'Unknown';
                 var size = r.size || 0;
                 var sizeText = size < 1024 ? size + ' bytes' : Math.round(size / 1024) + ' KB';
-                return '<button class="history-item" data-rev="' + r.revisionId + '">' +
+                return '<button class="history-item" data-rev="' + escapeHtml(r.revisionId) + '">' +
                     '<span class="history-item-date">' + date + '</span>' +
                     '<span class="history-item-user">' + escapeHtml(user) + '</span>' +
                     '<span class="history-item-size">' + sizeText + '</span>' +
@@ -2444,12 +2459,22 @@
         }
         setSaveStatus('saving');
         try {
-            var doc = await window.go.main.App.UpdateDocument(currentDocId, title, content);
+            var savedId = currentDocId;
+            var doc = await window.go.main.App.UpdateDocument(savedId, title, content);
+            if (savedId !== currentDocId) { await loadTree(); return; }
             lastKnownContent = content;
             lastKnownTitle = title;
-            window.__hexnoteHasUnsaved = false;
-            if (doc && doc.id === currentDocId) currentDocMeta = { status: doc.status, driveFileId: doc.driveFileId || '' };
-            setSaveStatus('saved');
+            if (doc) currentDocMeta = docMeta(doc);
+            // The user may have kept typing while the save was in flight.
+            var titleNow = document.getElementById('doc-title').value.trim() || 'Untitled';
+            if (editorMarkdown() === content && titleNow === title) {
+                window.__hexnoteHasUnsaved = false;
+                setSaveStatus('saved');
+            } else {
+                setSaveStatus('unsaved');
+                clearTimeout(saveTimeout);
+                saveTimeout = setTimeout(saveNow, autoSaveDelay);
+            }
             await loadTree();
         } catch (e) { console.error('save error:', errorMessage(e)); setSaveStatus('error'); }
     }
@@ -2461,8 +2486,12 @@
 
     // setDocMeta records the open page's publish state and redraws the header.
     function setDocMeta(doc) {
-        currentDocMeta = doc ? { status: doc.status, driveFileId: doc.driveFileId || '' } : null;
+        currentDocMeta = doc ? docMeta(doc) : null;
         renderDocStatus();
+    }
+
+    function docMeta(doc) {
+        return { status: doc.status, driveFileId: doc.driveFileId || '', driveModifiedAt: doc.driveModifiedAt || '' };
     }
 
     // renderDocStatus draws the one status line that says where the open page
@@ -2663,9 +2692,14 @@
         });
     }
 
+    // escapeHtml makes text safe for element content and for quoted
+    // attribute values (it escapes both kinds of quote).
     function escapeHtml(str) {
-        var d = document.createElement('div');
-        d.textContent = str;
-        return d.innerHTML;
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 })();
