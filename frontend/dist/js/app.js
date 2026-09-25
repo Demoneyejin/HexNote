@@ -1092,6 +1092,44 @@
         // Right-click on sidebar empty space → create at root level
         var pageTreeEl = document.getElementById('page-tree');
         if (pageTreeEl) {
+            // Dropping on empty space moves to the end of the top level.
+            pageTreeEl.addEventListener('dragover', function (e) {
+                if (!dragId || e.target.closest('.tree-item')) return;
+                e.preventDefault();
+                clearDropMarks();
+                pageTreeEl.classList.add('drop-root');
+            });
+            pageTreeEl.addEventListener('dragleave', function (e) {
+                if (e.target === pageTreeEl) pageTreeEl.classList.remove('drop-root');
+            });
+            pageTreeEl.addEventListener('drop', function (e) {
+                if (!dragId || e.target.closest('.tree-item')) return;
+                e.preventDefault();
+                var id = dragId;
+                dragId = null;
+                clearDropMarks();
+                moveDocument(id, '', '');
+            });
+            document.getElementById('btn-close-move').addEventListener('click', closeMovePicker);
+            document.getElementById('move-modal').addEventListener('mousedown', function (e) {
+                if (e.target.id === 'move-modal') closeMovePicker();
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape' && !document.getElementById('move-modal').classList.contains('hidden')) {
+                    e.preventDefault();
+                    closeMovePicker();
+                }
+            });
+            document.getElementById('move-modal').addEventListener('keydown', function (e) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    var opts = Array.prototype.slice.call(document.querySelectorAll('#move-list .move-option:not([disabled])'));
+                    var i = opts.indexOf(document.activeElement);
+                    var next = opts[(i + (e.key === 'ArrowDown' ? 1 : -1) + opts.length) % opts.length];
+                    if (next) next.focus();
+                }
+            });
+
             // Double-click or F2 renames in place.
             pageTreeEl.addEventListener('dblclick', function (e) {
                 var item = e.target.closest('.tree-item');
@@ -1591,6 +1629,7 @@
             e.preventDefault(); e.stopPropagation();
             showContextMenu(e, doc);
         });
+        bindTreeDrag(el, doc);
 
         var container = document.createElement('div');
         container.className = 'tree-node';
@@ -1603,6 +1642,148 @@
             container.appendChild(childDiv);
         }
         return container;
+    }
+
+    // === Moving pages: drag and drop, and the Move to... picker ===
+    var dragId = null;
+
+    function bindTreeDrag(el, doc) {
+        el.draggable = true;
+        el.addEventListener('dragstart', function (e) {
+            dragId = doc.id;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('application/x-hexnote-doc', doc.id);
+            el.classList.add('dragging');
+        });
+        el.addEventListener('dragend', function () {
+            dragId = null;
+            clearDropMarks();
+        });
+        el.addEventListener('dragover', function (e) {
+            if (!dragId) return;
+            var zone = dropZone(e, el, doc);
+            clearDropMarks();
+            if (!zone) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'move';
+            el.classList.add('drop-' + zone);
+        });
+        el.addEventListener('drop', function (e) {
+            if (!dragId) return;
+            var zone = dropZone(e, el, doc);
+            var id = dragId;
+            clearDropMarks();
+            if (!zone) return;
+            e.preventDefault();
+            e.stopPropagation();
+            dragId = null;
+            dropOn(id, doc, zone);
+        });
+    }
+
+    // dropZone decides what a drop at the pointer means: 'before' or 'after'
+    // the item (reorder among its siblings), or 'into' a folder (middle half).
+    // Returns null where the drop is not allowed.
+    function dropZone(e, el, target) {
+        if (target.id === dragId || isDescendant(target.id, dragId)) return null;
+        var r = el.getBoundingClientRect();
+        var y = (e.clientY - r.top) / Math.max(r.height, 1);
+        if (target.isFolder) return y < 0.25 ? 'before' : (y > 0.75 ? 'after' : 'into');
+        return y < 0.5 ? 'before' : 'after';
+    }
+
+    function clearDropMarks() {
+        document.querySelectorAll('.tree-item.drop-before, .tree-item.drop-after, .tree-item.drop-into, .tree-item.dragging')
+            .forEach(function (n) { n.classList.remove('drop-before', 'drop-after', 'drop-into', 'dragging'); });
+        document.getElementById('page-tree').classList.remove('drop-root');
+    }
+
+    function siblingsOf(parentId) {
+        var list = [];
+        if (!parentId) list = tree;
+        else (function walk(nodes) {
+            (nodes || []).forEach(function (n) {
+                if (n.document.id === parentId) list = n.children || [];
+                else walk(n.children);
+            });
+        })(tree);
+        return list.map(function (n) { return n.document; });
+    }
+
+    function dropOn(id, target, zone) {
+        var parentId, beforeId;
+        if (zone === 'into') {
+            parentId = target.id;
+            beforeId = '';
+        } else {
+            parentId = target.parentId || '';
+            beforeId = target.id;
+            if (zone === 'after') {
+                var sibs = siblingsOf(parentId);
+                var i = sibs.findIndex(function (d) { return d.id === target.id; });
+                beforeId = (i >= 0 && i + 1 < sibs.length) ? sibs[i + 1].id : '';
+                if (beforeId === id) return; // already right after target
+            }
+        }
+        moveDocument(id, parentId, beforeId);
+    }
+
+    async function moveDocument(id, parentId, beforeId) {
+        try {
+            var moved = await window.go.main.App.MoveDocumentTo(id, parentId, beforeId || '');
+            if (parentId) expandedFolders.add(parentId);
+            if (id === currentDocId && moved) setDocMeta(moved);
+            await loadTree();
+        } catch (e) {
+            showError('move', e);
+            await loadTree();
+        }
+    }
+
+    // openMovePicker lists the folders a page or folder can move into.
+    function openMovePicker(doc) {
+        var list = document.getElementById('move-list');
+        document.getElementById('move-title').textContent = 'Move \u201c' + doc.title + '\u201d to\u2026';
+        document.getElementById('move-hint').textContent = doc.driveFileId
+            ? 'It moves on Google Drive too, so teammates see it in the new folder.'
+            : 'It is not published, so it moves on this PC only.';
+        var options = [{ id: '', title: 'Top level of the workspace', depth: 0 }];
+        (function walk(nodes, depth) {
+            (nodes || []).forEach(function (n) {
+                var d = n.document;
+                if (!d.isFolder || d.id === doc.id) return;          // not into itself (or below it)
+                if (depth === 0 && d.title.toLowerCase() === 'assets') return;
+                options.push({ id: d.id, title: d.title, depth: depth + 1 });
+                walk(n.children, depth + 1);
+            });
+        })(tree, 0);
+
+        list.innerHTML = '';
+        options.forEach(function (o) {
+            var b = document.createElement('button');
+            b.className = 'move-option';
+            b.setAttribute('role', 'option');
+            b.style.paddingLeft = (12 + o.depth * 16) + 'px';
+            b.textContent = o.title;
+            var current = (doc.parentId || '') === o.id;
+            if (current) {
+                b.disabled = true;
+                b.textContent += ' (current)';
+            }
+            b.addEventListener('click', function () {
+                closeMovePicker();
+                moveDocument(doc.id, o.id, '');
+            });
+            list.appendChild(b);
+        });
+        document.getElementById('move-modal').classList.remove('hidden');
+        var first = list.querySelector('.move-option:not([disabled])');
+        (first || document.getElementById('btn-close-move')).focus();
+    }
+
+    function closeMovePicker() {
+        document.getElementById('move-modal').classList.add('hidden');
     }
 
     // startInlineRename turns a tree item's label into a text field.
@@ -1912,6 +2093,7 @@
         menu.querySelector('[data-action="new-folder"]').style.display = '';
         // Rename/Delete: only show on actual items, not root
         menu.querySelector('[data-action="rename"]').style.display = isRoot ? 'none' : '';
+        menu.querySelector('[data-action="move"]').style.display = isRoot ? 'none' : '';
         // Publish: drafts only (a renamed folder is a draft until its name reaches Drive)
         var publishItem = menu.querySelector('[data-action="publish"]');
         var canPublish = !isRoot && doc.status === 'draft';
@@ -1940,6 +2122,10 @@
             case 'publish':
                 if (!contextTarget) break;
                 await publishDocument(contextTarget.id);
+                break;
+            case 'move':
+                if (!contextTarget) break;
+                openMovePicker(contextTarget);
                 break;
             case 'delete':
                 if (!contextTarget) break;

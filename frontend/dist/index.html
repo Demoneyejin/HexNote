@@ -333,6 +333,7 @@
         <button data-action="new-folder">New Folder</button>
         <hr>
         <button data-action="rename">Rename</button>
+        <button data-action="move">Move to&hellip;</button>
         <button data-action="publish">Publish</button>
         <button data-action="delete" class="danger">Delete</button>
     </div>
@@ -345,6 +346,18 @@
         <hr>
         <button data-action="ws-delete" class="danger">Delete Workspace</button>
         <button data-action="ws-new">New Workspace</button>
+    </div>
+
+    <!-- Move to... picker -->
+    <div id="move-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="move-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="move-title">Move to&hellip;</h3>
+                <button id="btn-close-move" class="btn-icon" aria-label="Close">&times;</button>
+            </div>
+            <p id="move-hint" class="settings-hint move-hint"></p>
+            <div id="move-list" class="move-list" role="listbox" aria-labelledby="move-title"></div>
+        </div>
     </div>
 
     <!-- In-app confirmation sheet (replaces window.confirm) -->

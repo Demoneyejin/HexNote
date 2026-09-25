@@ -164,6 +164,20 @@
             d.sortOrder = Object.keys(S.docs).length + 100;
             return null;
         },
+        MoveDocumentTo: function (id, newParentId, beforeId) {
+            var d = requireDoc(id);
+            if (newParentId && descendants(id).concat([id]).indexOf(newParentId) >= 0) throw 'ERR_INVALID: A folder cannot be moved into itself.';
+            d.parentId = newParentId || '';
+            var sibs = Object.keys(S.docs).map(function (k) { return S.docs[k]; })
+                .filter(function (x) { return (x.parentId || '') === (newParentId || '') && x.id !== id; })
+                .sort(function (a, b) { return a.sortOrder - b.sortOrder; });
+            var ordered = [];
+            sibs.forEach(function (x) { if (x.id === beforeId) ordered.push(d); ordered.push(x); });
+            if (ordered.indexOf(d) < 0) ordered.push(d);
+            ordered.forEach(function (x, i) { x.sortOrder = i; });
+            if (S.offline && d.driveFileId) d.status = 'draft';
+            return clone(d);
+        },
         GetDocumentTree: function () { return buildTree(); },
         SearchDocuments: function (q) {
             q = (q || '').toLowerCase();

@@ -2205,3 +2205,69 @@ html, body {
     flex-shrink: 0;
     font-size: 13px;
 }
+
+/* ========================================
+   Moving pages: drag and drop, Move to...
+   ======================================== */
+
+.tree-item.dragging {
+    opacity: 0.45;
+}
+
+.tree-item.drop-before {
+    box-shadow: inset 0 2px 0 var(--primary);
+}
+
+.tree-item.drop-after {
+    box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+.tree-item.drop-into {
+    background: var(--sidebar-selected);
+    outline: 1px dashed var(--primary);
+    outline-offset: -1px;
+}
+
+.page-tree.drop-root {
+    box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+.move-hint {
+    margin: -4px 0 12px;
+}
+
+.move-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 50vh;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.move-option {
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    padding: 9px 12px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.move-option:last-child {
+    border-bottom: none;
+}
+
+.move-option:hover:not([disabled]),
+.move-option:focus-visible {
+    background: var(--sidebar-hover);
+    outline: none;
+}
+
+.move-option[disabled] {
+    color: var(--text-muted);
+    cursor: default;
+}

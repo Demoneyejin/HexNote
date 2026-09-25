@@ -110,6 +110,10 @@ export function MoveDocument(arg1, arg2) {
   return window['go']['main']['App']['MoveDocument'](arg1, arg2);
 }
 
+export function MoveDocumentTo(arg1, arg2, arg3) {
+  return window['go']['main']['App']['MoveDocumentTo'](arg1, arg2, arg3);
+}
+
 export function OnAuthComplete() {
   return window['go']['main']['App']['OnAuthComplete']();
 }

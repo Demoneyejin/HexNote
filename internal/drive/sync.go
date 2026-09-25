@@ -303,6 +303,14 @@ func (sm *SyncManager) pullFolder(run *pullRun, driveFolderID string, localParen
 				sm.downloadToImageCacheIfMissing(workspace.ID, f.Name, f.Id)
 			}
 
+			// A teammate moved it to another folder. A local move that has
+			// not reached Drive yet (status draft) wins until it is published.
+			if localDoc.ParentID != localParentID && localDoc.Status == "published" {
+				sm.db.SetParentFromSync(localDoc.ID, localParentID)
+				localDoc.ParentID = localParentID
+				run.result.UpdatedIDs = append(run.result.UpdatedIDs, localDoc.ID)
+			}
+
 			// A teammate renamed the folder. A local rename that has not
 			// reached Drive yet (status draft) wins until it is published.
 			if isFolder && f.Name != localDoc.Title && localDoc.Status == "published" {

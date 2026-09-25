@@ -792,3 +792,148 @@ func TestPublishIntoTrashedFileCreatesNewFile(t *testing.T) {
 		t.Errorf("new file = %+v", f)
 	}
 }
+
+// === Item 12: move and reorder ===
+
+func (ta *testApp) driveParents(id string) []string {
+	return ta.fake.Get(id).Parents
+}
+
+func TestMovePublishedPageMovesDriveFile(t *testing.T) {
+	ta := newTestApp(t)
+	a := ta.publishedFolder(t, "A")
+	b := ta.publishedFolder(t, "B")
+	page := ta.newPublishedPage(t, "Doc", "x\n", a.ID)
+
+	moved, err := ta.MoveDocument(page.ID, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.ParentID != b.ID || moved.Status != "published" {
+		t.Errorf("moved = %+v", moved)
+	}
+	if p := ta.driveParents(page.DriveFileID); len(p) != 1 || p[0] != b.DriveFileID {
+		t.Errorf("Drive parents = %v, want [%s]", p, b.DriveFileID)
+	}
+	// A refresh keeps it where it is.
+	ta.refresh()
+	if d, _ := ta.GetDocument(page.ID); d.ParentID != b.ID {
+		t.Errorf("refresh moved it back to %s", d.ParentID)
+	}
+
+	// To the top level = the workspace folder on Drive.
+	ta.MoveDocument(page.ID, "")
+	if p := ta.driveParents(page.DriveFileID); len(p) != 1 || p[0] != "root-folder" {
+		t.Errorf("Drive parents = %v, want [root-folder]", p)
+	}
+}
+
+func TestMoveIntoUnpublishedFolderCreatesItOnDrive(t *testing.T) {
+	ta := newTestApp(t)
+	page := ta.newPublishedPage(t, "Doc", "x\n", "")
+	local, _ := ta.CreateDocument("Local folder", "", true)
+
+	if _, err := ta.MoveDocument(page.ID, local.ID); err != nil {
+		t.Fatal(err)
+	}
+	f, _ := ta.GetDocument(local.ID)
+	if f.DriveFileID == "" || f.Status != "published" {
+		t.Fatalf("target folder should now exist on Drive: %+v", f)
+	}
+	if p := ta.driveParents(page.DriveFileID); len(p) != 1 || p[0] != f.DriveFileID {
+		t.Errorf("Drive parents = %v", p)
+	}
+}
+
+func TestMoveDraftIsLocalOnly(t *testing.T) {
+	ta := newTestApp(t)
+	b := ta.publishedFolder(t, "B")
+	draft, _ := ta.CreateDocument("Draft", "", false)
+	before := len(ta.fake.Requests)
+	if _, err := ta.MoveDocument(draft.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(ta.fake.Requests) != before {
+		t.Errorf("moving a draft should not call Drive: %v", ta.fake.Requests[before:])
+	}
+}
+
+func TestMoveGuards(t *testing.T) {
+	ta := newTestApp(t)
+	outer, _ := ta.CreateDocument("Outer", "", true)
+	inner, _ := ta.CreateDocument("Inner", outer.ID, true)
+	page, _ := ta.CreateDocument("Page", "", false)
+
+	for name, tc := range map[string][2]string{
+		"into itself":         {outer.ID, outer.ID},
+		"into its descendant": {outer.ID, inner.ID},
+		"into a page":         {inner.ID, page.ID},
+	} {
+		if _, err := ta.MoveDocument(tc[0], tc[1]); err == nil || !strings.HasPrefix(err.Error(), "ERR_INVALID:") {
+			t.Errorf("%s: err = %v, want ERR_INVALID", name, err)
+		}
+	}
+	if d, _ := ta.GetDocument(outer.ID); d.ParentID != "" {
+		t.Error("a rejected move must not change anything")
+	}
+}
+
+func TestMoveOfflineBecomesDraftAndPublishFinishesIt(t *testing.T) {
+	ta := newTestApp(t)
+	b := ta.publishedFolder(t, "B")
+	page := ta.newPublishedPage(t, "Doc", "x\n", "")
+	client := ta.client()
+
+	ta.setDrive(nil)
+	moved, err := ta.MoveDocument(page.ID, b.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Status != "draft" || moved.ParentID != b.ID {
+		t.Fatalf("offline move = %+v", moved)
+	}
+	ta.setDrive(client)
+	ta.refresh()
+	if d, _ := ta.GetDocument(page.ID); d.ParentID != b.ID {
+		t.Fatal("refresh must not undo a pending local move")
+	}
+	if _, err := ta.PublishDocument(page.ID); err != nil {
+		t.Fatal(err)
+	}
+	if p := ta.driveParents(page.DriveFileID); len(p) != 1 || p[0] != b.DriveFileID {
+		t.Errorf("publish should finish the move, parents = %v", p)
+	}
+}
+
+func TestRefreshFollowsTeammateMove(t *testing.T) {
+	ta := newTestApp(t)
+	b := ta.publishedFolder(t, "B")
+	page := ta.newPublishedPage(t, "Doc", "x\n", "")
+	ta.fake.Mu.Lock()
+	ta.fake.Files[page.DriveFileID].Parents = []string{b.DriveFileID}
+	ta.fake.Mu.Unlock()
+
+	ta.refresh()
+	if d, _ := ta.GetDocument(page.ID); d.ParentID != b.ID || d.Status != "published" {
+		t.Errorf("page should follow the teammate's move: %+v", d)
+	}
+}
+
+func TestReorderSiblings(t *testing.T) {
+	ta := newTestApp(t)
+	one, _ := ta.CreateDocument("One", "", false)
+	two, _ := ta.CreateDocument("Two", "", false)
+	three, _ := ta.CreateDocument("Three", "", false)
+
+	if _, err := ta.MoveDocumentTo(three.ID, "", one.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ta.titles(t), ","); got != "Three,One,Two" {
+		t.Errorf("order = %s, want Three,One,Two", got)
+	}
+	ta.MoveDocumentTo(three.ID, "", "")
+	if got := strings.Join(ta.titles(t), ","); got != "One,Two,Three" {
+		t.Errorf("order = %s, want One,Two,Three", got)
+	}
+	_ = two
+}

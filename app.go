@@ -437,17 +437,85 @@ func (a *App) DeleteDocument(id string) error {
 	return nil
 }
 
-func (a *App) MoveDocument(id string, newParentID string) error {
-	if _, err := a.getValidatedDoc(id); err != nil {
-		return err
+// MoveDocument moves a page or folder into another folder ("" = top level),
+// at the end.
+func (a *App) MoveDocument(id string, newParentID string) (*models.Document, error) {
+	return a.MoveDocumentTo(id, newParentID, "")
+}
+
+// MoveDocumentTo moves a page or folder into newParentID ("" = top level),
+// just before the sibling beforeID ("" = at the end). A published item is
+// moved on Drive too; an unpublished one only locally. If the Drive move
+// cannot be made now, the item becomes a draft and Publish completes it.
+// The order among siblings is kept on this PC only.
+func (a *App) MoveDocumentTo(id, newParentID, beforeID string) (*models.Document, error) {
+	doc, err := a.getValidatedDoc(id)
+	if err != nil {
+		return nil, err
 	}
-	// Validate target parent also belongs to the active workspace
 	if newParentID != "" {
-		if _, err := a.getValidatedDoc(newParentID); err != nil {
-			return fmt.Errorf("cannot move document to a different workspace")
+		parent, err := a.getValidatedDoc(newParentID)
+		if err != nil {
+			return nil, fmt.Errorf("ERR_INVALID: Pages can only be moved within the same workspace.")
+		}
+		if !parent.IsFolder {
+			return nil, fmt.Errorf("ERR_INVALID: Pages can only be moved into a folder.")
+		}
+		if a.db.IsDescendant(newParentID, id) {
+			return nil, fmt.Errorf("ERR_INVALID: A folder cannot be moved into itself.")
 		}
 	}
-	return a.db.MoveDocument(id, newParentID)
+	if beforeID != "" {
+		if _, err := a.getValidatedDoc(beforeID); err != nil {
+			beforeID = ""
+		}
+	}
+
+	parentChanged := doc.ParentID != newParentID
+	if err := a.db.PlaceDocument(id, newParentID, beforeID); err != nil {
+		return nil, err
+	}
+	if !parentChanged || doc.DriveFileID == "" {
+		return a.db.GetDocument(id)
+	}
+
+	if err := a.moveOnDrive(doc, newParentID); err != nil {
+		a.driveErr("move on Drive", err) // ends the session if the sign-in expired
+		a.db.SetDocumentStatus(id, "draft")
+		a.notify("warning", "Moved on this PC. HexNote couldn't move it on Google Drive; publish it to finish the move.")
+	}
+	return a.db.GetDocument(id)
+}
+
+// moveOnDrive puts a published item's Drive file into the Drive folder of
+// localParentID ("" = the workspace folder), creating that folder on Drive
+// if needed.
+func (a *App) moveOnDrive(doc *models.Document, localParentID string) error {
+	client := a.client()
+	if client == nil {
+		return errNotSignedIn
+	}
+	ws, err := a.db.GetActiveWorkspace()
+	if err != nil || ws == nil {
+		return fmt.Errorf("no active workspace")
+	}
+	target := ws.DriveFolderID
+	if localParentID != "" {
+		target, err = a.ensureParentFoldersPublished(client, localParentID, ws)
+		if err != nil {
+			return err
+		}
+	}
+	info, err := client.GetFileInfo(doc.DriveFileID)
+	if err != nil {
+		return err
+	}
+	for _, p := range info.Parents {
+		if p == target {
+			return nil // already there
+		}
+	}
+	return client.MoveFile(doc.DriveFileID, target, info.Parents)
 }
 
 // validateDocWorkspace ensures a document belongs to the active workspace.
@@ -617,10 +685,15 @@ func (a *App) publish(docID string, force bool) (*models.Document, error) {
 				return nil, a.driveErr("create Drive folder", err)
 			}
 			a.db.SetDriveFileID(doc.ID, folder.ID)
-		} else if err := client.RenameFile(doc.DriveFileID, doc.Title); err != nil {
-			// A published folder is only a draft after a rename that could
-			// not be pushed; publishing it pushes the name.
-			return nil, a.driveErr("rename Drive folder", err)
+		} else {
+			// A published folder is only a draft after a rename or move that
+			// could not be pushed; publishing pushes both.
+			if err := client.RenameFile(doc.DriveFileID, doc.Title); err != nil {
+				return nil, a.driveErr("rename Drive folder", err)
+			}
+			if err := a.moveOnDrive(doc, doc.ParentID); err != nil {
+				return nil, a.driveErr("move Drive folder", err)
+			}
 		}
 	} else {
 		// Publish document
@@ -638,6 +711,13 @@ func (a *App) publish(docID string, force bool) (*models.Document, error) {
 				fileID = "" // writing into the trash would hide the edit
 			case !force && doc.DriveModifiedAt != nil && info.ModifiedTime.After(doc.DriveModifiedAt.Add(conflictSkew)):
 				return nil, conflictError(info)
+			default:
+				// Finish a move that could not reach Drive earlier.
+				if !containsString(info.Parents, driveFolderID) {
+					if err := client.MoveFile(fileID, driveFolderID, info.Parents); err != nil {
+						return nil, a.driveErr("move the Drive file", err)
+					}
+				}
 			}
 		}
 
@@ -1176,6 +1256,15 @@ func (a *App) DumpLogs(logs string) (string, error) {
 }
 
 // Helpers
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
 
 func appDataDir() (string, error) {
 	configDir, err := os.UserConfigDir()

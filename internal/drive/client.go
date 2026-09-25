@@ -227,19 +227,20 @@ type FileInfo struct {
 	ModifiedTime time.Time
 	ModifiedBy   string // display name of the last person to change the file
 	Trashed      bool
+	Parents      []string
 }
 
 // GetFileInfo returns a file's current name, modifiedTime, last modifying
 // user and trash state.
 func (c *Client) GetFileInfo(fileID string) (*FileInfo, error) {
 	f, err := c.service.Files.Get(fileID).
-		Fields("name, modifiedTime, trashed, lastModifyingUser(displayName, emailAddress)").
+		Fields("name, modifiedTime, trashed, parents, lastModifyingUser(displayName, emailAddress)").
 		SupportsAllDrives(true).
 		Do()
 	if err != nil {
 		return nil, fmt.Errorf("get file metadata: %w", err)
 	}
-	info := &FileInfo{Name: f.Name, Trashed: f.Trashed}
+	info := &FileInfo{Name: f.Name, Trashed: f.Trashed, Parents: f.Parents}
 	if t, err := ParseTime(f.ModifiedTime); err == nil {
 		info.ModifiedTime = t
 	}
@@ -267,6 +268,28 @@ func (c *Client) RenameFile(fileID, name string) error {
 		Do()
 	if err != nil {
 		return fmt.Errorf("rename file: %w", err)
+	}
+	return nil
+}
+
+// MoveFile moves a file or folder into newParentID, removing it from the
+// given current parents.
+func (c *Client) MoveFile(fileID, newParentID string, oldParents []string) error {
+	call := c.service.Files.Update(fileID, &drive.File{}).
+		AddParents(newParentID).
+		Fields("id, parents").
+		SupportsAllDrives(true)
+	remove := make([]string, 0, len(oldParents))
+	for _, p := range oldParents {
+		if p != newParentID {
+			remove = append(remove, p)
+		}
+	}
+	if len(remove) > 0 {
+		call = call.RemoveParents(strings.Join(remove, ","))
+	}
+	if _, err := call.Do(); err != nil {
+		return fmt.Errorf("move file: %w", err)
 	}
 	return nil
 }

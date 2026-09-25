@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -445,5 +446,32 @@ func TestLegacySyncIntervalIgnored(t *testing.T) {
 	s, _ = db.GetSettings()
 	if s.SyncIntervalSecs != 0 {
 		t.Errorf("explicit 0 should be kept, got %d", s.SyncIntervalSecs)
+	}
+}
+
+func TestPlaceDocumentAndIsDescendant(t *testing.T) {
+	db := newTestDB(t)
+	f, _ := db.CreateDocument("F", "", "ws-1", true)
+	a, _ := db.CreateDocument("A", f.ID, "ws-1", false)
+	b, _ := db.CreateDocument("B", f.ID, "ws-1", false)
+	c, _ := db.CreateDocument("C", "", "ws-1", false)
+	other, _ := db.CreateDocument("Other ws", f.ID, "ws-2", false)
+
+	if err := db.PlaceDocument(c.ID, f.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	tree, _ := db.GetDocumentTree("ws-1")
+	var got []string
+	for _, n := range tree[0].Children {
+		got = append(got, n.Document.Title)
+	}
+	if strings.Join(got, ",") != "A,C,B" {
+		t.Errorf("children = %v, want A,C,B", got)
+	}
+	if d, _ := db.GetDocument(other.ID); d.SortOrder != 0 {
+		t.Errorf("other workspace's sort order touched: %d", d.SortOrder)
+	}
+	if !db.IsDescendant(a.ID, f.ID) || !db.IsDescendant(f.ID, f.ID) || db.IsDescendant(f.ID, a.ID) {
+		t.Error("IsDescendant wrong")
 	}
 }

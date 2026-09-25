@@ -54,7 +54,9 @@ export function KeepBothVersions(arg1:string):Promise<models.Document>;
 
 export function ListDriveFolders(arg1:string):Promise<Array<models.DriveFolder>>;
 
-export function MoveDocument(arg1:string,arg2:string):Promise<void>;
+export function MoveDocument(arg1:string,arg2:string):Promise<models.Document>;
+
+export function MoveDocumentTo(arg1:string,arg2:string,arg3:string):Promise<models.Document>;
 
 export function OnAuthComplete():Promise<models.AuthStatus>;
 
