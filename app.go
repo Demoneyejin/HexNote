@@ -696,9 +696,11 @@ func (a *App) publish(docID string, force bool) (*models.Document, error) {
 			}
 		}
 	} else {
-		// Publish document
+		// Publish document. The file on Drive gets relative image links
+		// (see drive.PortableContent) so it works outside this PC.
 		fileName := doc.Title + ".md"
 		fileID := doc.DriveFileID
+		driveContent := drive.PortableContent(doc.Content, a.folderDepth(doc))
 
 		if fileID != "" {
 			info, err := client.GetFileInfo(fileID)
@@ -723,14 +725,14 @@ func (a *App) publish(docID string, force bool) (*models.Document, error) {
 
 		var modified time.Time
 		if fileID == "" {
-			newID, mt, err := client.CreateFile(fileName, driveFolderID, doc.Content)
+			newID, mt, err := client.CreateFile(fileName, driveFolderID, driveContent)
 			if err != nil {
 				return nil, a.driveErr("create Drive file", err)
 			}
 			a.db.SetDriveFileID(doc.ID, newID)
 			modified = mt
 		} else {
-			mt, err := client.UpdateFile(fileID, fileName, doc.Content)
+			mt, err := client.UpdateFile(fileID, fileName, driveContent)
 			if err != nil {
 				return nil, a.driveErr("update Drive file", err)
 			}
@@ -898,9 +900,6 @@ func (a *App) publishReferencedImages(client *drive.Client, content string, ws *
 	}
 }
 
-// imagePathRe is used by publishReferencedImages to find image refs in content.
-var imagePathRe = regexp.MustCompile(`/images/[a-f0-9][-a-f0-9]*/[^\s)]+`)
-
 func (a *App) GetSyncStatus() (*models.SyncStatus, error) {
 	syncMgr := a.syncer()
 	if syncMgr == nil {
@@ -1047,7 +1046,10 @@ func (a *App) PreviewRevision(docID string, revisionID string) (string, error) {
 		return "", fmt.Errorf("document has not been synced to Drive yet")
 	}
 	content, err := client.DownloadRevision(doc.DriveFileID, revisionID)
-	return content, a.driveErr("load version", err)
+	if err != nil {
+		return "", a.driveErr("load version", err)
+	}
+	return drive.LocalizeContent(content, doc.WorkspaceID), nil
 }
 
 func (a *App) RestoreVersion(docID string, revisionID string) (*models.Document, error) {
@@ -1256,6 +1258,21 @@ func (a *App) DumpLogs(logs string) (string, error) {
 }
 
 // Helpers
+
+// folderDepth counts the folders above a document (0 = top level).
+func (a *App) folderDepth(doc *models.Document) int {
+	depth := 0
+	seen := map[string]bool{}
+	for p := doc.ParentID; p != "" && !seen[p] && depth < 100; depth++ {
+		seen[p] = true
+		parent, err := a.db.GetDocument(p)
+		if err != nil {
+			break
+		}
+		p = parent.ParentID
+	}
+	return depth
+}
 
 func containsString(list []string, s string) bool {
 	for _, v := range list {

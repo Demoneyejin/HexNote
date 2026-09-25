@@ -937,3 +937,55 @@ func TestReorderSiblings(t *testing.T) {
 	}
 	_ = two
 }
+
+// === Item 13: portable image links ===
+
+func TestPublishWritesRelativeImageLinks(t *testing.T) {
+	ta := newTestApp(t)
+	local := "![shot](/images/" + ta.ws.ID + "/img-a.png)\n"
+	top := ta.newPublishedPage(t, "Top", local, "")
+	if got := string(ta.fake.Get(top.DriveFileID).Content); got != "![shot](assets/img-a.png)\n" {
+		t.Errorf("top-level file on Drive = %q", got)
+	}
+	folder, _ := ta.CreateDocument("Design", "", true)
+	sub, _ := ta.CreateDocument("Sub", folder.ID, true)
+	nested := ta.newPublishedPage(t, "Nested", local, sub.ID)
+	if got := string(ta.fake.Get(nested.DriveFileID).Content); got != "![shot](../../assets/img-a.png)\n" {
+		t.Errorf("nested file on Drive = %q", got)
+	}
+	// The local copy keeps the form the editor can display.
+	if d, _ := ta.GetDocument(top.ID); d.Content != local {
+		t.Errorf("local content changed: %q", d.Content)
+	}
+}
+
+func TestPullLocalizesAllImageForms(t *testing.T) {
+	ta := newTestApp(t)
+	ta.fake.Put("", "Old.md", "text/plain", "root-folder", "![a](/images/11111111-2222-3333-4444-555555555555/img-a.png)\n")
+	ta.fake.Put("", "Slash.md", "text/plain", "root-folder", "![a](//images/abc/img-a.png)\n")
+	ta.fake.Put("", "New.md", "text/plain", "root-folder", "![a](assets/img-a.png)\n")
+	if err := ta.refresh(); err != nil {
+		t.Fatal(err)
+	}
+	want := "![a](/images/" + ta.ws.ID + "/img-a.png)\n"
+	tree, _ := ta.GetDocumentTree()
+	for _, n := range tree {
+		if n.Document.Content != want {
+			t.Errorf("%s content = %q, want %q", n.Document.Title, n.Document.Content, want)
+		}
+	}
+}
+
+func TestRestoreVersionLocalizesImages(t *testing.T) {
+	ta := newTestApp(t)
+	local := "![shot](/images/" + ta.ws.ID + "/img-a.png)\n"
+	doc := ta.newPublishedPage(t, "Top", local, "")
+	revs, _ := ta.GetVersionHistory(doc.ID)
+	restored, err := ta.RestoreVersion(doc.ID, revs[len(revs)-1].RevisionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Content != local {
+		t.Errorf("restored content = %q, want %q", restored.Content, local)
+	}
+}

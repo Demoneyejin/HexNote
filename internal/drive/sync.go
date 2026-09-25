@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -25,17 +24,8 @@ type SyncManager struct {
 	mu sync.Mutex
 }
 
-// imagePathRe matches image references like /images/{uuid}/ in markdown content.
-var imagePathRe = regexp.MustCompile(`(/images/)[a-f0-9][-a-f0-9]*/`)
-
 // ParseTime parses a Google Drive timestamp.
 func ParseTime(s string) (time.Time, error) { return parseDriveTime(s) }
-
-// LocalizeContent prepares markdown downloaded from Drive for this PC
-// (image links point at this workspace's local image cache).
-func LocalizeContent(content, localWorkspaceID string) string {
-	return rewriteImagePaths(content, localWorkspaceID)
-}
 
 // parseDriveTime parses a Google Drive timestamp which may or may not have
 // fractional seconds. Go's time.RFC3339 rejects fractional seconds and
@@ -329,12 +319,10 @@ func (sm *SyncManager) pullFolder(run *pullRun, driveFolderID string, localParen
 	return nil
 }
 
-// rewriteImagePaths replaces image path workspace UUIDs with the local workspace ID
-// and normalizes double-slash paths from older editor versions.
+// rewriteImagePaths points every image link form (old absolute, double
+// slash, new relative) at this PC's image cache. See images.go.
 func rewriteImagePaths(content, localWorkspaceID string) string {
-	content = strings.ReplaceAll(content, "](//images/", "](/images/")
-	content = strings.ReplaceAll(content, "](//Images/", "](/images/")
-	return imagePathRe.ReplaceAllString(content, "${1}"+localWorkspaceID+"/")
+	return LocalizeContent(content, localWorkspaceID)
 }
 
 // downloadToImageCache downloads a binary file from Drive and saves it to the local image cache.
