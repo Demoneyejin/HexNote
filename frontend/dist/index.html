@@ -11,8 +11,9 @@
     <div id="view-credentials" class="view hidden">
         <div class="setup-card">
             <h1 class="setup-title">HexNote</h1>
-            <h2>Welcome! One-time Setup</h2>
-            <p class="setup-desc">HexNote stores your docs on <strong>your own Google Drive</strong>. To get started, you'll need free Google Cloud credentials. This takes about 10 to 15 minutes and only needs to be done once.</p>
+            <h2 id="credentials-heading">Welcome! One-time Setup</h2>
+            <p id="credentials-intro" class="setup-desc">HexNote stores your docs on <strong>your own Google Drive</strong>. To get started, you'll need free Google Cloud credentials. This takes about 10 to 15 minutes and only needs to be done once.</p>
+            <p id="credentials-team-intro" class="setup-desc hidden"><strong>Team mode</strong> lets everyone in your studio open the same shared Drive folders. One person creates a Google Cloud project (about 10 to 15 minutes, free) and shares its credentials file with the team. HexNote then asks for full Google Drive access, which shared folders need.</p>
             <details class="setup-guide">
                 <summary class="setup-guide-toggle">Show me how (step-by-step setup guide)</summary>
                 <ol class="setup-steps">
@@ -31,6 +32,7 @@
             <button id="btn-save-credentials" class="btn-primary">Save &amp; Continue</button>
             <p id="credentials-error" class="error-text hidden"></p>
             <button id="btn-credentials-back" class="btn-link btn-muted hidden">Back</button>
+            <button id="btn-use-bundled-from-creds" class="btn-link btn-muted hidden">Use HexNote's sign-in instead (Solo mode)</button>
         </div>
     </div>
 
@@ -38,13 +40,14 @@
     <div id="view-signin" class="view hidden">
         <div class="setup-card">
             <h1 class="setup-title">HexNote</h1>
-            <h2>Sign in to Google</h2>
+            <h2 id="signin-heading">Sign in to Google</h2>
             <p id="signin-notice" class="notice-text hidden" role="status"></p>
-            <p class="setup-desc">Click below to authenticate with your Google account. A browser window will open.</p>
+            <p id="signin-desc" class="setup-desc">Click below to authenticate with your Google account. A browser window will open.</p>
             <button id="btn-google-signin" class="btn-primary btn-large">Sign in with Google</button>
             <p id="signin-waiting" class="status-text hidden">Waiting for authentication... Check your browser.</p>
             <p id="signin-error" class="error-text hidden"></p>
             <button id="btn-custom-credentials" class="btn-link btn-muted">Change API credentials</button>
+            <button id="btn-use-bundled" class="btn-link btn-muted hidden">Use HexNote's sign-in instead (Solo mode)</button>
         </div>
     </div>
 
@@ -72,7 +75,7 @@
                         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                     </div>
                     <h3>Join a shared workspace</h3>
-                    <p>Open a workspace someone shared with you</p>
+                    <p id="path-join-desc">Open a workspace someone shared with you</p>
                 </button>
             </div>
         </div>
@@ -162,6 +165,19 @@
         </div>
     </div>
 
+    <!-- === Solo mode: name a new workspace (HexNote creates its Drive folder) === -->
+    <div id="view-solo-create" class="view hidden">
+        <div class="setup-card">
+            <h1 class="setup-title">HexNote</h1>
+            <h2>Name your workspace</h2>
+            <p class="setup-desc">HexNote creates a folder with this name in your Google Drive and keeps the workspace's published pages there.</p>
+            <input type="text" id="solo-workspace-name" class="input-text" placeholder="For example: Studio Wiki" aria-label="Workspace name" maxlength="120">
+            <button id="btn-solo-create" class="btn-primary">Create workspace</button>
+            <p id="solo-create-error" class="error-text hidden"></p>
+            <button id="btn-solo-back" class="btn-link btn-muted">Back</button>
+        </div>
+    </div>
+
     <!-- === Editor View (Phase 1 UI, now with workspace header) === -->
     <div id="view-editor" class="view hidden">
         <div id="app-layout" class="app-layout">
@@ -248,6 +264,7 @@
                 <h3 id="sharing-title">Share Workspace</h3>
                 <button id="btn-close-sharing" class="btn-icon" aria-label="Close">&times;</button>
             </div>
+            <p id="share-solo-note" class="settings-hint share-solo-note hidden">People you invite can open the pages in Google Drive. To edit them in HexNote, they need Team mode (a Google Cloud project for your team); in Solo mode HexNote only sees files it created.</p>
             <div class="share-form">
                 <input type="email" id="share-email" placeholder="Email address" class="input-text" aria-label="Email address">
                 <select id="share-role" class="input-select" aria-label="Role">
@@ -297,6 +314,7 @@
                         <span id="settings-account-email" class="account-email"></span>
                         <button id="btn-settings-signout" class="btn-secondary btn-small">Sign out</button>
                     </div>
+                    <p id="settings-account-mode" class="settings-hint"></p>
                     <button id="btn-settings-credentials" class="btn-link btn-muted settings-link">Change Google Cloud credentials</button>
                     <p class="settings-hint">Signing out keeps every page saved on this PC.</p>
                 </div>

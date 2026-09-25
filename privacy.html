@@ -96,7 +96,7 @@
             <h2>How HexNote signs in to Google</h2>
             <p>HexNote uses a Google Cloud project that <strong>you</strong> create (the "bring your own key" setup). You paste that project's OAuth client file into HexNote, and you sign in on Google's own page in your browser. The sign-in is granted to your Cloud project, not to the HexNote authors, who never see your credentials or tokens.</p>
 
-            <h2>What Google Drive access HexNote asks for</h2>
+            <h2>What Google Drive access HexNote asks for (Team mode)</h2>
             <p>HexNote requests the Google Drive scope <code>https://www.googleapis.com/auth/drive</code>. Google describes it as permission to <em>"see, edit, create, and delete all of your Google Drive files"</em>. That is broader than HexNote needs for any single action, and we want to be exact about how it is used. HexNote uses it only to:</p>
             <ul>
                 <li><strong>List folder names</strong> in your My Drive and folders shared with you, when you choose or join a workspace folder</li>
@@ -108,12 +108,16 @@
             </ul>
             <p>HexNote does not open, read or change the contents of files outside your workspace folders. Because it is open source, you can check this in the code (<code>internal/drive/client.go</code> holds every Drive call).</p>
 
+            <h2>Solo mode (when your copy of HexNote offers it)</h2>
+            <p>Some builds of HexNote also offer <strong>Solo mode</strong>: "Sign in with Google" using HexNote's own Google-verified OAuth client, with no Cloud project to set up. In Solo mode HexNote requests only the scope <code>https://www.googleapis.com/auth/drive.file</code>, which Google describes as permission to <em>"see, edit, create, and delete only the specific Google Drive files you use with this app"</em>. HexNote can then see only the folders and files it created itself (your workspace folders and their pages and images). It cannot list, open or change anything else in your Drive, including folders others shared with you. Everything else in this policy applies to both modes: your token stays on your PC, and the HexNote authors receive nothing.</p>
+
             <h2>What is stored on your PC</h2>
             <p>In your application data folder (<code>%APPDATA%\HexNote</code> on Windows, <code>~/Library/Application Support/HexNote</code> on macOS):</p>
             <ul>
                 <li><code>hexnote.db</code>: your pages (including drafts that were never published), the page tree, search index, settings and the member list of shared workspaces</li>
                 <li><code>image_cache/</code>: images you added to pages</li>
-                <li><code>oauth_credentials.json</code>: the OAuth client file you pasted</li>
+                <li><code>oauth_credentials.json</code>: the OAuth client file you pasted (Team mode)</li>
+                <li><code>auth_mode</code> and <code>token_scope</code>: which sign-in mode and permission the saved token belongs to</li>
                 <li><code>token.json</code>: your Google sign-in token. Signing out in HexNote deletes it.</li>
             </ul>
             <p>None of this leaves your PC except what you publish to Google Drive.</p>

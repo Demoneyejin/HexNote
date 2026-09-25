@@ -2389,6 +2389,14 @@ html, body {
     background: var(--sidebar-hover);
 }
 
+/* Text fields already show focus with their own border. */
+.input-text:focus-visible,
+.input-select:focus-visible,
+#search-input:focus-visible,
+#credentials-json:focus-visible {
+    outline: none;
+}
+
 /* The title field and the page body show a caret, not a ring. */
 .doc-title:focus-visible,
 #editor .ProseMirror:focus-visible,
@@ -2411,4 +2419,23 @@ html, body {
     font-family: var(--font);
     font-size: 11px;
     color: var(--text-muted);
+}
+
+/* ========================================
+   Solo / Team mode
+   ======================================== */
+
+#view-solo-create .setup-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    text-align: center;
+}
+
+.path-card-muted {
+    opacity: 0.7;
+}
+
+.share-solo-note {
+    margin: -4px 0 14px;
 }

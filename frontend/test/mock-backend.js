@@ -95,8 +95,16 @@
             return clone(S.settings);
         },
         GetAuthStatus: function () { return clone(S.auth); },
-        ImportCredentials: function () { S.auth.hasCredentials = true; S.auth.mode = 'team'; return null; },
-        UseBundledCredentials: function () { S.auth.hasCredentials = true; S.auth.mode = 'solo'; return null; },
+        ImportCredentials: function () {
+            var wasSolo = S.auth.mode === 'solo';
+            S.auth.hasCredentials = true; S.auth.mode = 'team';
+            if (wasSolo) S.auth.isSignedIn = false; // different client: sign in again
+            return null;
+        },
+        UseBundledCredentials: function () {
+            if (!S.auth.bundledAvailable) throw 'ERR_INVALID: This build of HexNote has no built-in sign-in.';
+            S.auth.hasCredentials = true; S.auth.mode = 'solo'; S.auth.isSignedIn = false; return null;
+        },
         StartOAuthFlow: function () { return null; },
         OnAuthComplete: function () { S.auth.isSignedIn = true; return clone(S.auth); },
         SignOut: function () { S.auth.isSignedIn = false; return null; },

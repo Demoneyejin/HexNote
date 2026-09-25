@@ -27,6 +27,24 @@ HexNote is a **free desktop wiki/knowledge base** that replaces Confluence, Noti
 
 ---
 
+## Solo mode and Team mode
+
+HexNote can sign in to Google in two ways. Which ones you see depends on the build.
+
+| | **Solo mode** | **Team mode** |
+|---|---|---|
+| Sign-in | "Sign in with Google" using HexNote's own OAuth client | Your team's own Google Cloud project (bring your own key) |
+| Setup | None: three steps from download to first page (sign in, name a workspace, write) | One person creates a Cloud project once (10 to 15 minutes) and shares the credentials file |
+| Google Drive scope | `drive.file`: HexNote only sees files and folders it created (or you opened with it) | `drive`: full Drive access, which shared folders need |
+| New workspace | You name it; HexNote creates the folder in your My Drive | Pick any Drive folder, or create one |
+| Join a folder someone shared with you | Not possible (the folder is invisible to `drive.file`) | Yes: search shared folders or paste a link |
+| Share a workspace | You can invite people to the Drive folder; to edit it in HexNote they need Team mode | Yes |
+| Available in | Builds that bundle HexNote's verified client (see *Building from Source*) | Every build |
+
+Switching modes (the link under the sign-in button, or **Settings > Account**) asks you to sign in again, because the two modes use different permissions. Your pages on this PC are kept. Workspaces created in Team mode stay listed, but Solo mode cannot see their Drive folders unless HexNote created them.
+
+The rest of this section describes **Team mode**, which is also what a build without a bundled client uses.
+
 ## Quick Start
 
 HexNote uses a **bring-your-own-key** model — you create free Google Cloud credentials and the app connects directly to your own Google Drive. No middleman, no third-party servers, no one else has access to your data.
@@ -150,7 +168,16 @@ cd HexNote
 wails build -ldflags "-s -w"
 ```
 
-The binary is at `build/bin/hexnote.exe`. It uses the bring-your-own-key setup described above: each user pastes their own OAuth client JSON on first launch. No credentials are compiled in.
+The binary is at `build/bin/hexnote.exe`. Built like this it offers Team mode only: each user pastes an OAuth client JSON on first launch. No credentials are compiled in.
+
+To build with **Solo mode** as well, use `./build.sh` (or `build.bat` on Windows) with HexNote's verified OAuth client in a `.env` file that is never committed:
+
+```bash
+HEXNOTE_CLIENT_ID=....apps.googleusercontent.com
+HEXNOTE_CLIENT_SECRET=...
+```
+
+The scripts inject them with `-X hexnote/internal/drive.bundledClientID=...` and `-X hexnote/internal/drive.bundledClientSecret=...`. Without a `.env` they build the Team-only app. A desktop client's secret is not confidential (Google treats installed apps as public clients); the sign-in is protected by PKCE. The bundled client must request only `drive.file`, which Google classes as non-sensitive, so it can be verified without the paid security assessment that the restricted `drive` scope needs.
 
 ### Tests
 
