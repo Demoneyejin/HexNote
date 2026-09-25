@@ -234,6 +234,26 @@
             window.runtime.EventsOn('sync:docs-updated', function () {
                 loadTree();
             });
+
+            // A teammate deleted pages on Drive: they are gone here too, except
+            // pages with unpublished local edits, which were kept as drafts.
+            window.runtime.EventsOn('sync:docs-removed', async function (data) {
+                var removed = (data && data.removed) || [];
+                var detached = (data && data.detached) || [];
+                if (currentDocId && removed.indexOf(currentDocId) >= 0) {
+                    currentDocId = null;
+                    window.__hexnoteHasUnsaved = false;
+                    document.getElementById('editor-container').classList.add('hidden');
+                }
+                await loadTree();
+                updateEmptyState();
+                if (removed.length) {
+                    showToast(removed.length === 1 ? 'A page was deleted by a teammate.' : removed.length + ' pages were deleted by a teammate.', 'info');
+                }
+                if (detached.length) {
+                    showToast((detached.length === 1 ? 'A page you edited was' : detached.length + ' pages you edited were') + ' deleted on Drive. Your edits are kept here as drafts.', 'warning', 8000);
+                }
+            });
         }
     }
 
@@ -1165,9 +1185,36 @@
         }
     }
 
+    // findDoc returns the tree's copy of a document, or null.
+    function findDoc(id) {
+        var found = null;
+        (function walk(nodes) {
+            (nodes || []).forEach(function (n) {
+                if (found) return;
+                if (n.document.id === id) found = n.document;
+                else walk(n.children);
+            });
+        })(tree);
+        return found;
+    }
+
+    // deleteConfirmText names what deleting does on Drive, so nobody is
+    // surprised that teammates lose the page too.
+    function deleteConfirmText(doc) {
+        if (!doc) return 'Delete this page?';
+        if (doc.isFolder) {
+            return doc.driveFileId
+                ? 'Delete the folder "' + doc.title + '" and everything in it, and move it to the Drive trash? Teammates will no longer see it.'
+                : 'Delete the folder "' + doc.title + '" and everything in it? Published pages inside move to the Drive trash.';
+        }
+        return doc.driveFileId
+            ? 'Delete "' + doc.title + '" from the workspace and move its Drive file to trash? Teammates will no longer see it.'
+            : 'Delete this draft? It only exists on this PC.';
+    }
+
     async function deleteCurrentDoc() {
         if (!currentDocId) return;
-        if (!confirm('Delete this page? This cannot be undone.')) return;
+        if (!confirm(deleteConfirmText(findDoc(currentDocId)))) return;
         try {
             await window.go.main.App.DeleteDocument(currentDocId);
             currentDocId = null;
@@ -1334,7 +1381,7 @@
                 break;
             case 'delete':
                 if (!contextTarget) break;
-                if (confirm('Delete "' + contextTarget.title + '"?')) {
+                if (confirm(deleteConfirmText(contextTarget))) {
                     await window.go.main.App.DeleteDocument(contextTarget.id);
                     if (currentDocId === contextTarget.id) { currentDocId = null; document.getElementById('editor-container').classList.add('hidden'); }
                     await loadTree();

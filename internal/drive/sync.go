@@ -52,15 +52,29 @@ func (sm *SyncManager) GetStatus() models.SyncStatus {
 	return sm.status
 }
 
-// SyncWorkspace pulls published content from Drive into the local DB.
-// Returns the IDs of documents that were created or updated.
-func (sm *SyncManager) SyncWorkspace(workspace *models.Workspace) ([]string, error) {
+// SyncResult reports what a refresh changed locally.
+type SyncResult struct {
+	// UpdatedIDs are documents created or updated from Drive.
+	UpdatedIDs []string
+	// RemovedIDs are documents deleted locally because their Drive file was
+	// trashed or deleted by someone else.
+	RemovedIDs []string
+	// DetachedIDs are documents whose Drive file disappeared while they had
+	// unpublished local edits; they are kept as unlinked drafts.
+	DetachedIDs []string
+}
+
+// SyncWorkspace retries pending Drive trash operations, then pulls published
+// content from Drive into the local DB.
+func (sm *SyncManager) SyncWorkspace(workspace *models.Workspace) (*SyncResult, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	sm.status = models.SyncStatus{State: "syncing", Message: "Refreshing..."}
 
-	updatedIDs, err := sm.pullFromDrive(workspace)
+	sm.retryPendingTrash(workspace)
+
+	result, err := sm.pullFromDrive(workspace)
 	if err != nil {
 		sm.status = models.SyncStatus{State: "error", Message: fmt.Sprintf("Refresh failed: %v", err)}
 		return nil, err
@@ -70,35 +84,144 @@ func (sm *SyncManager) SyncWorkspace(workspace *models.Workspace) ([]string, err
 	now := time.Now().UTC()
 	sm.status = models.SyncStatus{State: "idle", Message: "Up to date", LastSynced: &now}
 
-	return updatedIDs, nil
+	return result, nil
+}
+
+// retryPendingTrash trashes Drive files of pages that were deleted while the
+// trash call could not be made (offline, signed out). A file that no longer
+// exists counts as done. Other failures keep the tombstone for next time.
+func (sm *SyncManager) retryPendingTrash(workspace *models.Workspace) {
+	ids, err := sm.db.GetDeletedDriveFiles(workspace.ID)
+	if err != nil {
+		return
+	}
+	for _, id := range ids {
+		err := sm.client.TrashFile(id)
+		if err == nil || IsNotFound(err) {
+			sm.db.RemoveDeletedDriveFile(workspace.ID, id)
+		}
+	}
+}
+
+// pullRun holds the state of one pull pass.
+type pullRun struct {
+	workspace *models.Workspace
+	// local maps Drive file IDs to local documents; entries are removed as
+	// the corresponding Drive files are seen, so what remains was not found.
+	local map[string]*models.Document
+	// skip holds Drive IDs of pages the user deleted locally (tombstones).
+	skip   map[string]bool
+	result *SyncResult
 }
 
 // pullFromDrive downloads published files from Drive into local DB (recursive).
-func (sm *SyncManager) pullFromDrive(workspace *models.Workspace) ([]string, error) {
+func (sm *SyncManager) pullFromDrive(workspace *models.Workspace) (*SyncResult, error) {
 	tree, err := sm.db.GetDocumentTree(workspace.ID)
 	if err != nil {
 		return nil, err
 	}
-	localByDriveID := make(map[string]*models.Document)
-	flattenTree(tree, localByDriveID)
+	run := &pullRun{
+		workspace: workspace,
+		local:     make(map[string]*models.Document),
+		skip:      make(map[string]bool),
+		result:    &SyncResult{UpdatedIDs: []string{}, RemovedIDs: []string{}, DetachedIDs: []string{}},
+	}
+	flattenTree(tree, run.local)
+	tombstones, err := sm.db.GetDeletedDriveFiles(workspace.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range tombstones {
+		run.skip[id] = true
+	}
 
-	var updatedIDs []string
-	err = sm.pullFolder(workspace, workspace.DriveFolderID, "", localByDriveID, &updatedIDs)
-	return updatedIDs, err
+	if err := sm.pullFolder(run, workspace.DriveFolderID, ""); err != nil {
+		return nil, err
+	}
+
+	// Every folder was listed successfully, so anything left in run.local is
+	// no longer in the workspace on Drive: a teammate trashed or deleted it.
+	sm.reconcileMissing(tree, run)
+	return run.result, nil
 }
 
-// pullFolder syncs a single Drive folder into the local DB, then recurses into subfolders.
-func (sm *SyncManager) pullFolder(workspace *models.Workspace, driveFolderID string, localParentID string, localByDriveID map[string]*models.Document, updatedIDs *[]string) error {
+// reconcileMissing handles local documents whose Drive file was not found.
+// A subtree with no local-only work is deleted locally. A subtree that holds
+// unpublished edits is kept: its missing Drive links are cleared and the
+// pages become drafts, so publishing creates new files instead of writing
+// into a trashed one.
+func (sm *SyncManager) reconcileMissing(tree []*models.TreeNode, run *pullRun) {
+	if len(run.local) == 0 {
+		return
+	}
+	var walk func(nodes []*models.TreeNode, parentMissing bool)
+	walk = func(nodes []*models.TreeNode, parentMissing bool) {
+		for _, node := range nodes {
+			doc := node.Document
+			_, missing := run.local[doc.DriveFileID]
+			missing = missing && doc.DriveFileID != ""
+			if missing && !parentMissing {
+				if subtreeHasLocalWork(node) {
+					detachMissing(sm, node, run)
+				} else {
+					if err := sm.db.DeleteDocument(doc.ID); err == nil {
+						run.result.RemovedIDs = append(run.result.RemovedIDs, doc.ID)
+					}
+				}
+				continue
+			}
+			walk(node.Children, parentMissing || missing)
+		}
+	}
+	walk(tree, false)
+}
+
+// subtreeHasLocalWork reports whether a node or any descendant has content
+// that exists only on this PC (a draft or unpublished edits).
+func subtreeHasLocalWork(node *models.TreeNode) bool {
+	if !node.Document.IsFolder && node.Document.Status == "draft" {
+		return true
+	}
+	for _, c := range node.Children {
+		if subtreeHasLocalWork(c) {
+			return true
+		}
+	}
+	return false
+}
+
+func detachMissing(sm *SyncManager, node *models.TreeNode, run *pullRun) {
+	doc := node.Document
+	if _, missing := run.local[doc.DriveFileID]; missing && doc.DriveFileID != "" {
+		sm.db.SetDriveFileID(doc.ID, "")
+		sm.db.SetDocumentStatus(doc.ID, "draft")
+		run.result.DetachedIDs = append(run.result.DetachedIDs, doc.ID)
+	}
+	for _, c := range node.Children {
+		detachMissing(sm, c, run)
+	}
+}
+
+// pullFolder syncs a single Drive folder into the local DB, then recurses into
+// subfolders. Any listing error aborts the pull so that files in an unlisted
+// folder are never mistaken for deleted ones.
+func (sm *SyncManager) pullFolder(run *pullRun, driveFolderID string, localParentID string) error {
+	workspace := run.workspace
 	files, err := sm.client.ListFiles(driveFolderID)
 	if err != nil {
 		return err
 	}
 
 	for _, f := range files {
+		// A page deleted on this PC whose Drive file could not be trashed yet.
+		if run.skip[f.Id] {
+			continue
+		}
+
 		isFolder := f.MimeType == "application/vnd.google-apps.folder"
 		isMd := strings.HasSuffix(strings.ToLower(f.Name), ".md")
 
-		localDoc, exists := localByDriveID[f.Id]
+		localDoc, exists := run.local[f.Id]
 
 		if !exists {
 			// New item from Drive — create locally as published
@@ -136,13 +259,18 @@ func (sm *SyncManager) pullFolder(workspace *models.Workspace, driveFolderID str
 				sm.downloadToImageCache(workspace.ID, f.Name, f.Id)
 			}
 
-			*updatedIDs = append(*updatedIDs, doc.ID)
+			run.result.UpdatedIDs = append(run.result.UpdatedIDs, doc.ID)
 
 			if isFolder {
-				sm.pullFolder(workspace, f.Id, doc.ID, localByDriveID, updatedIDs)
+				if err := sm.pullFolder(run, f.Id, doc.ID); err != nil {
+					return err
+				}
 			}
 
 		} else {
+			// Seen on Drive: not a remote deletion.
+			delete(run.local, f.Id)
+
 			// Existing item — only update if it's still published locally.
 			// If the user has made local edits (status = 'draft'), don't
 			// overwrite their work — they'll publish when ready.
@@ -156,7 +284,7 @@ func (sm *SyncManager) pullFolder(workspace *models.Workspace, driveFolderID str
 						sm.db.UpdateDocumentFromSync(localDoc.ID, title, content)
 						sm.db.SetDriveModifiedAt(localDoc.ID, remoteTime)
 						sm.db.ClearDirty(localDoc.ID)
-						*updatedIDs = append(*updatedIDs, localDoc.ID)
+						run.result.UpdatedIDs = append(run.result.UpdatedIDs, localDoc.ID)
 					}
 				}
 			}
@@ -167,10 +295,10 @@ func (sm *SyncManager) pullFolder(workspace *models.Workspace, driveFolderID str
 			}
 
 			if isFolder {
-				sm.pullFolder(workspace, f.Id, localDoc.ID, localByDriveID, updatedIDs)
+				if err := sm.pullFolder(run, f.Id, localDoc.ID); err != nil {
+					return err
+				}
 			}
-
-			delete(localByDriveID, f.Id)
 		}
 	}
 

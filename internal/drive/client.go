@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"hexnote/internal/models"
@@ -30,6 +31,18 @@ func escapeDriveQuery(s string) string {
 
 func NewClient(ctx context.Context, ts oauth2.TokenSource) (*Client, error) {
 	srv, err := drive.NewService(ctx, option.WithTokenSource(ts))
+	if err != nil {
+		return nil, fmt.Errorf("create drive service: %w", err)
+	}
+	return &Client{service: srv}, nil
+}
+
+// NewClientWithEndpoint builds a client that talks to a different API base
+// path (for example a drivefake server in tests). Requests are authorized
+// through ts, so token-refresh failures surface exactly as in production.
+func NewClientWithEndpoint(ctx context.Context, ts oauth2.TokenSource, endpoint string) (*Client, error) {
+	hc := &http.Client{Transport: &oauth2.Transport{Source: ts, Base: http.DefaultTransport}}
+	srv, err := drive.NewService(ctx, option.WithHTTPClient(hc), option.WithEndpoint(endpoint))
 	if err != nil {
 		return nil, fmt.Errorf("create drive service: %w", err)
 	}
@@ -199,6 +212,19 @@ func (c *Client) UpdateFile(fileID, name, content string) error {
 		return fmt.Errorf("update file: %w", err)
 	}
 
+	return nil
+}
+
+// TrashFile moves a file (or folder, with its contents) to the Drive trash.
+// The owner can restore it from drive.google.com for 30 days.
+func (c *Client) TrashFile(fileID string) error {
+	_, err := c.service.Files.Update(fileID, &drive.File{Trashed: true}).
+		Fields("id").
+		SupportsAllDrives(true).
+		Do()
+	if err != nil {
+		return fmt.Errorf("trash file: %w", err)
+	}
 	return nil
 }
 

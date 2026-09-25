@@ -25,10 +25,30 @@ type App struct {
 	authMgr     *drive.AuthManager
 	driveClient *drive.Client
 	syncMgr     *drive.SyncManager
+
+	// emitFn sends an event to the frontend. It defaults to the Wails runtime
+	// and is replaced in tests, where no Wails context exists.
+	emitFn func(name string, data ...interface{})
 }
 
 func NewApp() *App {
 	return &App{}
+}
+
+// emit sends an event to the frontend.
+func (a *App) emit(name string, data ...interface{}) {
+	if a.emitFn != nil {
+		a.emitFn(name, data...)
+		return
+	}
+	if a.ctx != nil {
+		wailsRuntime.EventsEmit(a.ctx, name, data...)
+	}
+}
+
+// notify shows a toast in the frontend (level: info, success, warning, error).
+func (a *App) notify(level, message string) {
+	a.emit("notification", map[string]string{"level": level, "message": message})
 }
 
 func (a *App) startup(ctx context.Context) {
@@ -204,11 +224,54 @@ func (a *App) UpdateDocument(id string, title string, content string) (*models.D
 	return a.db.UpdateDocument(id, title, content)
 }
 
+// DeleteDocument deletes a page (or folder and its contents) locally and moves
+// its Drive file to the Drive trash, so the page does not come back on the
+// next refresh here or on a teammate's PC. If the trash call cannot be made
+// now, the Drive ID is recorded as a tombstone: sync skips it and retries the
+// trash on every refresh.
 func (a *App) DeleteDocument(id string) error {
-	if _, err := a.getValidatedDoc(id); err != nil {
+	doc, err := a.getValidatedDoc(id)
+	if err != nil {
 		return err
 	}
-	return a.db.DeleteDocument(id)
+	driveIDs, err := a.db.DriveTrashRoots(id)
+	if err != nil {
+		return err
+	}
+	if err := a.db.DeleteDocument(id); err != nil {
+		return err
+	}
+	if len(driveIDs) == 0 {
+		return nil
+	}
+
+	wsID := doc.WorkspaceID
+	var pending, forbidden int
+	for _, fileID := range driveIDs {
+		if a.driveClient != nil {
+			err := a.driveClient.TrashFile(fileID)
+			if err == nil || drive.IsNotFound(err) {
+				continue
+			}
+			if drive.Classify(err) == drive.KindForbidden {
+				forbidden++
+			} else {
+				pending++
+			}
+			fmt.Fprintf(os.Stderr, "DeleteDocument: trash %s: %v\n", fileID, err)
+		} else {
+			pending++
+		}
+		a.db.AddDeletedDriveFile(wsID, fileID)
+	}
+
+	switch {
+	case forbidden > 0:
+		a.notify("warning", "Deleted on this PC. You don't have permission to move the Drive file to trash, so teammates will still see it. Ask the folder owner to delete it.")
+	case pending > 0:
+		a.notify("warning", "Deleted on this PC. HexNote couldn't reach Google Drive and will move the Drive file to trash on the next refresh.")
+	}
+	return nil
 }
 
 func (a *App) MoveDocument(id string, newParentID string) error {
@@ -312,13 +375,21 @@ func (a *App) TriggerSync() error {
 	if err != nil || ws == nil {
 		return fmt.Errorf("no active workspace")
 	}
-	updatedIDs, syncErr := a.syncMgr.SyncWorkspace(ws)
-
-	if len(updatedIDs) > 0 {
-		wailsRuntime.EventsEmit(a.ctx, "sync:docs-updated", updatedIDs)
+	result, syncErr := a.syncMgr.SyncWorkspace(ws)
+	if syncErr != nil {
+		return syncErr
 	}
 
-	return syncErr
+	if len(result.UpdatedIDs) > 0 {
+		a.emit("sync:docs-updated", result.UpdatedIDs)
+	}
+	if len(result.RemovedIDs) > 0 || len(result.DetachedIDs) > 0 {
+		a.emit("sync:docs-removed", map[string][]string{
+			"removed":  result.RemovedIDs,
+			"detached": result.DetachedIDs,
+		})
+	}
+	return nil
 }
 
 // PublishDocument pushes a document (and its parent folders) to Google Drive.
@@ -424,11 +495,7 @@ func (a *App) publishReferencedImages(content string, ws *models.Workspace) {
 		return
 	}
 
-	dataDir, err := appDataDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "publishReferencedImages: appDataDir error: %v\n", err)
-		return
-	}
+	dataDir := a.appDataDir
 
 	assetsFolderID, err := a.driveClient.EnsureFolder(ws.DriveFolderID, "assets")
 	if err != nil {
@@ -672,7 +739,7 @@ func (a *App) UpdateSettings(syncIntervalSecs int, theme string, autoSaveDelaySe
 	if err := a.db.UpdateSettings(s); err != nil {
 		return nil, err
 	}
-	wailsRuntime.EventsEmit(a.ctx, "settings:changed", s)
+	a.emit("settings:changed", s)
 	return &s, nil
 }
 
@@ -684,10 +751,7 @@ func (a *App) UploadImage(base64Data string, filename string) (string, error) {
 		return "", fmt.Errorf("no active workspace")
 	}
 
-	dataDir, err := appDataDir()
-	if err != nil {
-		return "", err
-	}
+	dataDir := a.appDataDir
 
 	// Sanitize filename: strip path separators, use only the base name
 	safeFilename := filepath.Base(filename)

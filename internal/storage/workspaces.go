@@ -106,6 +106,12 @@ func (d *Database) DeleteWorkspace(workspaceID string) error {
 		return err
 	}
 
+	// Delete tombstones for pages deleted in this workspace
+	_, err = tx.Exec("DELETE FROM deleted_drive_files WHERE workspace_id = ?", workspaceID)
+	if err != nil {
+		return err
+	}
+
 	// Delete workspace members
 	_, err = tx.Exec("DELETE FROM workspace_members WHERE workspace_id = ?", workspaceID)
 	if err != nil {

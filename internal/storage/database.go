@@ -107,6 +107,16 @@ func (d *Database) migrate() error {
 		created_at TEXT DEFAULT (datetime('now')),
 		UNIQUE(workspace_id, filename)
 	);
+
+	-- Drive files whose page was deleted locally but that could not be moved
+	-- to the Drive trash yet (offline, no permission). Sync skips these IDs so
+	-- the page does not come back, and retries the trash on every refresh.
+	CREATE TABLE IF NOT EXISTS deleted_drive_files (
+		workspace_id TEXT NOT NULL,
+		drive_file_id TEXT NOT NULL,
+		deleted_at TEXT DEFAULT (datetime('now')),
+		PRIMARY KEY (workspace_id, drive_file_id)
+	);
 	`
 
 	if _, err := d.db.Exec(schema); err != nil {
