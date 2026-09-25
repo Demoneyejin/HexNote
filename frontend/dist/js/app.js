@@ -14,7 +14,8 @@
     var activeWorkspace = null;
     var autoSaveDelay = 2000;
     var selectedRevisionId = null;
-    var lastKnownContent = '';  // tracks the last content loaded/saved to DB — prevents auto-save from re-dirtying unchanged docs
+    var lastKnownContent = '';  // serializer output for the last content loaded/saved — prevents auto-save from re-dirtying unchanged docs
+    var lastKnownTitle = '';    // title as last loaded/saved — a title-only edit must still reach the backend
 
     // === View Management ===
     var ALL_VIEWS = ['view-credentials', 'view-signin', 'view-path-choice', 'view-workspaces', 'view-onboarding', 'view-join', 'view-editor'];
@@ -986,6 +987,7 @@
                 var doc = await window.go.main.App.RestoreVersion(currentDocId, selectedRevisionId);
                 editor.commands.setContent(doc.content || '');
                 document.getElementById('doc-title').value = doc.title;
+                markClean(doc.title);
                 document.getElementById('history-modal').classList.add('hidden');
                 showToast('Version restored', 'success');
                 setSaveStatus('Saved');
@@ -1127,8 +1129,12 @@
         try {
             var doc = await window.go.main.App.GetDocument(id);
             document.getElementById('doc-title').value = doc.title;
-            lastKnownContent = doc.content || '';
-            editor.commands.setContent(lastKnownContent);
+            editor.commands.setContent(doc.content || '');
+            // Compare future edits against the serializer's own output, not the
+            // raw file: TipTap's markdown round-trip is not byte-identical
+            // (blank lines after lists/tables, escaping), so comparing against
+            // doc.content would mark untouched pages as modified.
+            markClean(doc.title);
             document.getElementById('editor-container').classList.remove('hidden');
             document.getElementById('empty-state').classList.add('hidden');
             window.__hexnoteHasUnsaved = false;
@@ -1191,19 +1197,36 @@
 
     function onTitleChange() {
         if (!currentDocId) return;
+        window.__hexnoteHasUnsaved = true;
         setSaveStatus('Unsaved');
         clearTimeout(saveTimeout);
         saveTimeout = setTimeout(saveNow, autoSaveDelay);
+    }
+
+    // editorMarkdown returns the editor content as markdown with a single
+    // trailing newline, the conventional ending for a text file on Drive.
+    function editorMarkdown() {
+        var md = editor.storage.markdown.getMarkdown();
+        if (md && md.charAt(md.length - 1) !== '\n') md += '\n';
+        return md;
+    }
+
+    // markClean records the editor's current state as saved.
+    function markClean(title) {
+        lastKnownContent = editorMarkdown();
+        lastKnownTitle = title;
+        window.__hexnoteHasUnsaved = false;
     }
 
     async function saveNow() {
         if (!currentDocId) return;
         clearTimeout(saveTimeout);
         var title = document.getElementById('doc-title').value.trim() || 'Untitled';
-        var content = editor.storage.markdown.getMarkdown();
-        // Skip the save if content hasn't actually changed from what we loaded/last saved.
-        // This prevents auto-save from re-dirtying a document that was just updated by sync.
-        if (content.trim() === lastKnownContent.trim()) {
+        var content = editorMarkdown();
+        // Skip the save only if neither the body nor the title changed since
+        // the last load/save. This keeps auto-save from re-dirtying a document
+        // that was just updated by sync, without dropping title-only edits.
+        if (content === lastKnownContent && title === lastKnownTitle) {
             window.__hexnoteHasUnsaved = false;
             setSaveStatus('Saved');
             return;
@@ -1212,6 +1235,7 @@
         try {
             var doc = await window.go.main.App.UpdateDocument(currentDocId, title, content);
             lastKnownContent = content;
+            lastKnownTitle = title;
             window.__hexnoteHasUnsaved = false;
             setSaveStatus('Saved');
             // Editing sets status to 'draft' — show the Publish button
@@ -1296,8 +1320,15 @@
                 if (!contextTarget) break;
                 var newTitle = prompt('Rename:', contextTarget.title);
                 if (newTitle && newTitle.trim()) {
-                    await window.go.main.App.UpdateDocument(contextTarget.id, newTitle.trim(), contextTarget.content || '');
-                    if (currentDocId === contextTarget.id) document.getElementById('doc-title').value = newTitle.trim();
+                    if (currentDocId === contextTarget.id) {
+                        // Renaming the open page: route through saveNow so the
+                        // editor's (possibly unsaved) body goes with the new title
+                        // instead of the tree's stale copy of the content.
+                        document.getElementById('doc-title').value = newTitle.trim();
+                        await saveNow();
+                    } else {
+                        await window.go.main.App.UpdateDocument(contextTarget.id, newTitle.trim(), contextTarget.content || '');
+                    }
                     await loadTree();
                 }
                 break;
