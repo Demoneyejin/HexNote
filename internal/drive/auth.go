@@ -82,6 +82,12 @@ func (am *AuthManager) SaveCredentials(jsonContent string) error {
 		return err
 	}
 
+	// A token is only valid for the client that issued it. Switching to a
+	// different client ID means signing in again.
+	if am.config != nil && am.config.ClientID != creds.Installed.ClientID {
+		am.SignOut()
+	}
+
 	if err := os.WriteFile(am.credentialsPath(), []byte(jsonContent), 0600); err != nil {
 		return err
 	}

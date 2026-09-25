@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"hexnote/internal/drive"
@@ -19,10 +21,15 @@ import (
 )
 
 type App struct {
-	ctx         context.Context
-	db          *storage.Database
-	appDataDir  string
-	authMgr     *drive.AuthManager
+	ctx        context.Context
+	db         *storage.Database
+	appDataDir string
+	authMgr    *drive.AuthManager
+
+	// driveMu guards driveClient and syncMgr. Wails runs bound methods
+	// concurrently and an expired sign-in clears both, so methods take one
+	// snapshot through client()/syncer() instead of reading the fields.
+	driveMu     sync.RWMutex
 	driveClient *drive.Client
 	syncMgr     *drive.SyncManager
 
@@ -89,8 +96,84 @@ func (a *App) initDriveClient() {
 		fmt.Fprintf(os.Stderr, "Failed to create drive client: %v\n", err)
 		return
 	}
+	a.setDrive(client)
+}
+
+// client returns the current Drive client, or nil when signed out.
+func (a *App) client() *drive.Client {
+	a.driveMu.RLock()
+	defer a.driveMu.RUnlock()
+	return a.driveClient
+}
+
+// syncer returns the current sync manager, or nil when signed out.
+func (a *App) syncer() *drive.SyncManager {
+	a.driveMu.RLock()
+	defer a.driveMu.RUnlock()
+	return a.syncMgr
+}
+
+// setDrive installs a Drive client (and a sync manager for it); nil clears both.
+func (a *App) setDrive(client *drive.Client) {
+	a.driveMu.Lock()
+	defer a.driveMu.Unlock()
 	a.driveClient = client
-	a.syncMgr = drive.NewSyncManager(client, a.db, a.appDataDir)
+	a.syncMgr = nil
+	if client != nil {
+		a.syncMgr = drive.NewSyncManager(client, a.db, a.appDataDir)
+	}
+}
+
+// === Errors ===
+//
+// Errors returned to the frontend start with a stable prefix that
+// describeError() in app.js maps to a sentence and an action:
+//   ERR_AUTH:      sign-in expired or missing  -> Sign in again
+//   ERR_OFFLINE:   Google Drive not reachable  -> Retry
+//   ERR_FORBIDDEN: no permission on Drive      -> Open folder in Drive
+//   ERR_NOTFOUND:  file or folder is gone      -> Refresh
+//   ERR_CONFLICT:  changed on Drive by someone else (see PublishDocument)
+// The rest of the message is detail for the console and log.
+
+var errNotSignedIn = errors.New("ERR_AUTH: not signed in to Google")
+
+// driveErr turns a Drive failure into a prefixed error. An expired or revoked
+// sign-in also ends the session, so the UI can ask the user to sign in again
+// instead of failing every call with raw OAuth text.
+func (a *App) driveErr(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	switch drive.Classify(err) {
+	case drive.KindAuth:
+		a.expireSession(true)
+		return fmt.Errorf("ERR_AUTH: %s: Google sign-in expired: %v", action, err)
+	case drive.KindOffline:
+		return fmt.Errorf("ERR_OFFLINE: %s: %v", action, err)
+	case drive.KindForbidden:
+		return fmt.Errorf("ERR_FORBIDDEN: %s: %v", action, err)
+	case drive.KindNotFound:
+		return fmt.Errorf("ERR_NOTFOUND: %s: %v", action, err)
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
+// expireSession forgets a sign-in that Google no longer accepts: the saved
+// token is deleted, Drive access is dropped and, if notify is set, the
+// frontend receives auth:expired. Local pages are not touched.
+func (a *App) expireSession(notify bool) {
+	a.driveMu.Lock()
+	wasSignedIn := a.driveClient != nil
+	a.driveClient = nil
+	a.syncMgr = nil
+	a.driveMu.Unlock()
+
+	if a.authMgr != nil {
+		a.authMgr.SignOut()
+	}
+	if notify && wasSignedIn {
+		a.emit("auth:expired")
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -101,22 +184,46 @@ func (a *App) shutdown(ctx context.Context) {
 
 // === Auth methods ===
 
+// GetAuthStatus reports whether credentials exist and whether the user is
+// signed in. The sign-in is checked against Google: if the refresh token was
+// revoked or expired, the session ends here and SessionExpired is set. When
+// Google cannot be reached the user stays signed in (working offline) and the
+// last known email is reported.
 func (a *App) GetAuthStatus() (*models.AuthStatus, error) {
+	client := a.client()
 	status := &models.AuthStatus{
 		HasCredentials: a.authMgr.HasCredentials(),
-		IsSignedIn:     a.authMgr.HasValidToken() && a.driveClient != nil,
+		IsSignedIn:     a.authMgr.HasValidToken() && client != nil,
 	}
-	if status.IsSignedIn {
-		email, err := a.driveClient.GetUserEmail()
-		if err == nil {
-			status.UserEmail = email
-		}
+	if !status.IsSignedIn {
+		return status, nil
+	}
+	email, err := client.GetUserEmail()
+	switch {
+	case err == nil:
+		status.UserEmail = email
+		a.db.SetSetting("accountEmail", email)
+	case drive.Classify(err) == drive.KindAuth:
+		a.expireSession(false)
+		status.IsSignedIn = false
+		status.SessionExpired = true
+	default:
+		status.UserEmail, _ = a.db.GetSetting("accountEmail")
+		status.Offline = drive.Classify(err) == drive.KindOffline
 	}
 	return status, nil
 }
 
+// ImportCredentials stores the user's OAuth client JSON. Tokens belong to a
+// client ID, so switching to a different client signs the user out.
 func (a *App) ImportCredentials(jsonContent string) error {
-	return a.authMgr.SaveCredentials(jsonContent)
+	if err := a.authMgr.SaveCredentials(jsonContent); err != nil {
+		return err
+	}
+	if !a.authMgr.HasValidToken() {
+		a.setDrive(nil)
+	}
+	return nil
 }
 
 func (a *App) StartOAuthFlow() error {
@@ -132,8 +239,7 @@ func (a *App) OnAuthComplete() (*models.AuthStatus, error) {
 }
 
 func (a *App) SignOut() error {
-	a.driveClient = nil
-	a.syncMgr = nil
+	a.setDrive(nil)
 	return a.authMgr.SignOut()
 }
 
@@ -171,36 +277,44 @@ func (a *App) RenameWorkspace(workspaceID string, newName string) error {
 // === Drive folder browsing ===
 
 func (a *App) ListDriveFolders(parentFolderID string) ([]models.DriveFolder, error) {
-	if a.driveClient == nil {
-		return nil, fmt.Errorf("not signed in")
+	client := a.client()
+	if client == nil {
+		return nil, errNotSignedIn
 	}
-	return a.driveClient.ListFolders(parentFolderID)
+	folders, err := client.ListFolders(parentFolderID)
+	return folders, a.driveErr("list Drive folders", err)
 }
 
 func (a *App) CreateDriveFolder(name string, parentFolderID string) (*models.DriveFolder, error) {
-	if a.driveClient == nil {
-		return nil, fmt.Errorf("not signed in")
+	client := a.client()
+	if client == nil {
+		return nil, errNotSignedIn
 	}
-	return a.driveClient.CreateFolder(name, parentFolderID)
+	folder, err := client.CreateFolder(name, parentFolderID)
+	return folder, a.driveErr("create Drive folder", err)
 }
 
 func (a *App) SearchSharedFolders(query string) ([]models.DriveFolder, error) {
-	if a.driveClient == nil {
-		return nil, fmt.Errorf("not signed in")
+	client := a.client()
+	if client == nil {
+		return nil, errNotSignedIn
 	}
-	return a.driveClient.SearchSharedFolders(query)
+	folders, err := client.SearchSharedFolders(query)
+	return folders, a.driveErr("search shared folders", err)
 }
 
 // ResolveFolderLink extracts a folder ID from a Google Drive URL and returns its metadata.
 func (a *App) ResolveFolderLink(link string) (*models.DriveFolder, error) {
-	if a.driveClient == nil {
-		return nil, fmt.Errorf("not signed in")
+	client := a.client()
+	if client == nil {
+		return nil, errNotSignedIn
 	}
 	folderID := parseDriveFolderID(link)
 	if folderID == "" {
 		return nil, fmt.Errorf("could not extract folder ID from the link")
 	}
-	return a.driveClient.GetFolderByID(folderID)
+	folder, err := client.GetFolderByID(folderID)
+	return folder, a.driveErr("open folder link", err)
 }
 
 // === Document methods (workspace-aware) ===
@@ -246,16 +360,21 @@ func (a *App) DeleteDocument(id string) error {
 	}
 
 	wsID := doc.WorkspaceID
+	client := a.client()
 	var pending, forbidden int
 	for _, fileID := range driveIDs {
-		if a.driveClient != nil {
-			err := a.driveClient.TrashFile(fileID)
+		if client != nil {
+			err := client.TrashFile(fileID)
 			if err == nil || drive.IsNotFound(err) {
 				continue
 			}
-			if drive.Classify(err) == drive.KindForbidden {
+			switch drive.Classify(err) {
+			case drive.KindForbidden:
 				forbidden++
-			} else {
+			case drive.KindAuth:
+				a.driveErr("move to Drive trash", err) // ends the session
+				pending++
+			default:
 				pending++
 			}
 			fmt.Fprintf(os.Stderr, "DeleteDocument: trash %s: %v\n", fileID, err)
@@ -368,16 +487,17 @@ func (a *App) SearchDocuments(query string) ([]models.SearchResult, error) {
 
 // TriggerSync pulls published content from Drive (refresh only, no push).
 func (a *App) TriggerSync() error {
-	if a.syncMgr == nil {
-		return fmt.Errorf("not signed in")
+	syncMgr := a.syncer()
+	if syncMgr == nil {
+		return errNotSignedIn
 	}
 	ws, err := a.db.GetActiveWorkspace()
 	if err != nil || ws == nil {
 		return fmt.Errorf("no active workspace")
 	}
-	result, syncErr := a.syncMgr.SyncWorkspace(ws)
+	result, syncErr := syncMgr.SyncWorkspace(ws)
 	if syncErr != nil {
-		return syncErr
+		return a.driveErr("refresh from Drive", syncErr)
 	}
 
 	if len(result.UpdatedIDs) > 0 {
@@ -394,8 +514,9 @@ func (a *App) TriggerSync() error {
 
 // PublishDocument pushes a document (and its parent folders) to Google Drive.
 func (a *App) PublishDocument(docID string) (*models.Document, error) {
-	if a.driveClient == nil {
-		return nil, fmt.Errorf("not signed in")
+	client := a.client()
+	if client == nil {
+		return nil, errNotSignedIn
 	}
 	doc, err := a.getValidatedDoc(docID)
 	if err != nil {
@@ -409,18 +530,18 @@ func (a *App) PublishDocument(docID string) (*models.Document, error) {
 	// Ensure parent folders exist on Drive (publish ancestors first)
 	driveFolderID := ws.DriveFolderID
 	if doc.ParentID != "" {
-		driveFolderID, err = a.ensureParentFoldersPublished(doc.ParentID, ws)
+		driveFolderID, err = a.ensureParentFoldersPublished(client, doc.ParentID, ws)
 		if err != nil {
-			return nil, fmt.Errorf("publish parent folders: %w", err)
+			return nil, a.driveErr("publish parent folders", err)
 		}
 	}
 
 	if doc.IsFolder {
 		// Publish folder
 		if doc.DriveFileID == "" {
-			folder, err := a.driveClient.CreateFolder(doc.Title, driveFolderID)
+			folder, err := client.CreateFolder(doc.Title, driveFolderID)
 			if err != nil {
-				return nil, fmt.Errorf("create Drive folder: %w", err)
+				return nil, a.driveErr("create Drive folder", err)
 			}
 			a.db.SetDriveFileID(doc.ID, folder.ID)
 		}
@@ -428,14 +549,14 @@ func (a *App) PublishDocument(docID string) (*models.Document, error) {
 		// Publish document
 		fileName := doc.Title + ".md"
 		if doc.DriveFileID == "" {
-			fileID, err := a.driveClient.CreateFile(fileName, driveFolderID, doc.Content)
+			fileID, err := client.CreateFile(fileName, driveFolderID, doc.Content)
 			if err != nil {
-				return nil, fmt.Errorf("create Drive file: %w", err)
+				return nil, a.driveErr("create Drive file", err)
 			}
 			a.db.SetDriveFileID(doc.ID, fileID)
 		} else {
-			if err := a.driveClient.UpdateFile(doc.DriveFileID, fileName, doc.Content); err != nil {
-				return nil, fmt.Errorf("update Drive file: %w", err)
+			if err := client.UpdateFile(doc.DriveFileID, fileName, doc.Content); err != nil {
+				return nil, a.driveErr("update Drive file", err)
 			}
 		}
 	}
@@ -448,7 +569,7 @@ func (a *App) PublishDocument(docID string) (*models.Document, error) {
 
 	// Upload any images referenced in the content that haven't been synced
 	if !doc.IsFolder {
-		a.publishReferencedImages(doc.Content, ws)
+		a.publishReferencedImages(client, doc.Content, ws)
 	}
 
 	return a.db.GetDocument(docID)
@@ -456,7 +577,7 @@ func (a *App) PublishDocument(docID string) (*models.Document, error) {
 
 // ensureParentFoldersPublished walks up the parent chain and creates any
 // unpublished folders on Drive. Returns the Drive folder ID of the immediate parent.
-func (a *App) ensureParentFoldersPublished(parentID string, ws *models.Workspace) (string, error) {
+func (a *App) ensureParentFoldersPublished(client *drive.Client, parentID string, ws *models.Workspace) (string, error) {
 	parent, err := a.db.GetDocument(parentID)
 	if err != nil {
 		return ws.DriveFolderID, nil
@@ -470,14 +591,14 @@ func (a *App) ensureParentFoldersPublished(parentID string, ws *models.Workspace
 	// Recurse to grandparent first
 	grandparentDriveFolderID := ws.DriveFolderID
 	if parent.ParentID != "" {
-		grandparentDriveFolderID, err = a.ensureParentFoldersPublished(parent.ParentID, ws)
+		grandparentDriveFolderID, err = a.ensureParentFoldersPublished(client, parent.ParentID, ws)
 		if err != nil {
 			return "", err
 		}
 	}
 
 	// Create this folder on Drive
-	folder, err := a.driveClient.CreateFolder(parent.Title, grandparentDriveFolderID)
+	folder, err := client.CreateFolder(parent.Title, grandparentDriveFolderID)
 	if err != nil {
 		return "", err
 	}
@@ -488,7 +609,7 @@ func (a *App) ensureParentFoldersPublished(parentID string, ws *models.Workspace
 
 // publishReferencedImages uploads any local-only images to Drive's assets folder.
 // Called during PublishDocument to ensure all embedded images are available on Drive.
-func (a *App) publishReferencedImages(content string, ws *models.Workspace) {
+func (a *App) publishReferencedImages(client *drive.Client, content string, ws *models.Workspace) {
 	// Upload all unsynced images for this workspace
 	unsynced, err := a.db.GetUnsyncedImages(ws.ID)
 	if err != nil || len(unsynced) == 0 {
@@ -497,7 +618,7 @@ func (a *App) publishReferencedImages(content string, ws *models.Workspace) {
 
 	dataDir := a.appDataDir
 
-	assetsFolderID, err := a.driveClient.EnsureFolder(ws.DriveFolderID, "assets")
+	assetsFolderID, err := client.EnsureFolder(ws.DriveFolderID, "assets")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "publishReferencedImages: EnsureFolder error: %v\n", err)
 		return
@@ -510,7 +631,7 @@ func (a *App) publishReferencedImages(content string, ws *models.Workspace) {
 			fmt.Fprintf(os.Stderr, "publishReferencedImages: read %s error: %v\n", imgPath, err)
 			continue
 		}
-		driveFileID, err := a.driveClient.UploadBinaryFile(img.Filename, assetsFolderID, data)
+		driveFileID, err := client.UploadBinaryFile(img.Filename, assetsFolderID, data)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "publishReferencedImages: upload %s error: %v\n", img.Filename, err)
 			continue
@@ -537,18 +658,20 @@ func (a *App) publishReferencedImages(content string, ws *models.Workspace) {
 var imagePathRe = regexp.MustCompile(`/images/[a-f0-9][-a-f0-9]*/[^\s)]+`)
 
 func (a *App) GetSyncStatus() (*models.SyncStatus, error) {
-	if a.syncMgr == nil {
+	syncMgr := a.syncer()
+	if syncMgr == nil {
 		return &models.SyncStatus{State: "idle", Message: "Not connected"}, nil
 	}
-	status := a.syncMgr.GetStatus()
+	status := syncMgr.GetStatus()
 	return &status, nil
 }
 
 // === Collaboration ===
 
 func (a *App) ShareWorkspace(workspaceID string, email string, role string) error {
-	if a.driveClient == nil {
-		return fmt.Errorf("not signed in")
+	client := a.client()
+	if client == nil {
+		return errNotSignedIn
 	}
 	// Validate role against allowlist — only "reader" and "writer" are permitted
 	if role != "reader" && role != "writer" {
@@ -562,9 +685,9 @@ func (a *App) ShareWorkspace(workspaceID string, email string, role string) erro
 		return fmt.Errorf("workspace mismatch")
 	}
 
-	perm, err := a.driveClient.AddPermission(ws.DriveFolderID, email, role)
+	perm, err := client.AddPermission(ws.DriveFolderID, email, role)
 	if err != nil {
-		return err
+		return a.driveErr("share workspace", err)
 	}
 
 	// Cache locally
@@ -579,6 +702,7 @@ func (a *App) ShareWorkspace(workspaceID string, email string, role string) erro
 }
 
 func (a *App) GetWorkspaceMembers(workspaceID string) ([]models.WorkspaceMember, error) {
+	client := a.client()
 	// Enforce active workspace boundary — never leak members from other workspaces
 	ws, err := a.db.GetActiveWorkspace()
 	if err != nil || ws == nil {
@@ -588,13 +712,14 @@ func (a *App) GetWorkspaceMembers(workspaceID string) ([]models.WorkspaceMember,
 		return nil, fmt.Errorf("workspace mismatch")
 	}
 
-	if a.driveClient == nil {
+	if client == nil {
 		return a.db.GetWorkspaceMembers(workspaceID)
 	}
 
 	// Fetch fresh from Drive and cache
-	perms, err := a.driveClient.ListPermissions(ws.DriveFolderID)
+	perms, err := client.ListPermissions(ws.DriveFolderID)
 	if err != nil {
+		a.driveErr("list members", err) // ends the session if the sign-in expired
 		return a.db.GetWorkspaceMembers(workspaceID)
 	}
 
@@ -616,8 +741,9 @@ func (a *App) GetWorkspaceMembers(workspaceID string) ([]models.WorkspaceMember,
 }
 
 func (a *App) RemoveWorkspaceMember(workspaceID string, email string) error {
-	if a.driveClient == nil {
-		return fmt.Errorf("not signed in")
+	client := a.client()
+	if client == nil {
+		return errNotSignedIn
 	}
 
 	// Validate workspace boundary first — prevent cross-workspace permission removal
@@ -636,8 +762,8 @@ func (a *App) RemoveWorkspaceMember(workspaceID string, email string) error {
 
 	for _, m := range members {
 		if m.Email == email && m.PermissionID != "" {
-			if err := a.driveClient.RemovePermission(ws.DriveFolderID, m.PermissionID); err != nil {
-				return err
+			if err := client.RemovePermission(ws.DriveFolderID, m.PermissionID); err != nil {
+				return a.driveErr("remove member", err)
 			}
 			break
 		}
@@ -649,8 +775,9 @@ func (a *App) RemoveWorkspaceMember(workspaceID string, email string) error {
 // === Version History ===
 
 func (a *App) GetVersionHistory(docID string) ([]models.Revision, error) {
-	if a.driveClient == nil {
-		return nil, fmt.Errorf("not signed in")
+	client := a.client()
+	if client == nil {
+		return nil, errNotSignedIn
 	}
 	doc, err := a.getValidatedDoc(docID)
 	if err != nil {
@@ -659,12 +786,14 @@ func (a *App) GetVersionHistory(docID string) ([]models.Revision, error) {
 	if doc.DriveFileID == "" {
 		return nil, fmt.Errorf("document has not been synced to Drive yet")
 	}
-	return a.driveClient.ListRevisions(doc.DriveFileID)
+	revs, err := client.ListRevisions(doc.DriveFileID)
+	return revs, a.driveErr("load version history", err)
 }
 
 func (a *App) PreviewRevision(docID string, revisionID string) (string, error) {
-	if a.driveClient == nil {
-		return "", fmt.Errorf("not signed in")
+	client := a.client()
+	if client == nil {
+		return "", errNotSignedIn
 	}
 	doc, err := a.getValidatedDoc(docID)
 	if err != nil {
@@ -673,7 +802,8 @@ func (a *App) PreviewRevision(docID string, revisionID string) (string, error) {
 	if doc.DriveFileID == "" {
 		return "", fmt.Errorf("document has not been synced to Drive yet")
 	}
-	return a.driveClient.DownloadRevision(doc.DriveFileID, revisionID)
+	content, err := client.DownloadRevision(doc.DriveFileID, revisionID)
+	return content, a.driveErr("load version", err)
 }
 
 func (a *App) RestoreVersion(docID string, revisionID string) (*models.Document, error) {

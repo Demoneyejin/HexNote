@@ -55,6 +55,12 @@ type AuthStatus struct {
 	HasCredentials bool   `json:"hasCredentials"`
 	IsSignedIn     bool   `json:"isSignedIn"`
 	UserEmail      string `json:"userEmail,omitempty"`
+	// SessionExpired is set when Google rejected the saved sign-in (revoked
+	// or expired refresh token); the token has been cleared.
+	SessionExpired bool `json:"sessionExpired,omitempty"`
+	// Offline is set when the sign-in could not be checked because Google
+	// was unreachable; the user stays signed in.
+	Offline bool `json:"offline,omitempty"`
 }
 
 // SyncStatus represents the current sync state

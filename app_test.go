@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -65,14 +68,12 @@ func (ta *testApp) connect(t *testing.T, ts oauth2.TokenSource) {
 	if err != nil {
 		t.Fatalf("NewClientWithEndpoint: %v", err)
 	}
-	ta.driveClient = client
-	ta.syncMgr = drive.NewSyncManager(client, ta.db, ta.appDataDir)
+	ta.setDrive(client)
 }
 
 // disconnect simulates being offline / signed out.
 func (ta *testApp) disconnect() {
-	ta.driveClient = nil
-	ta.syncMgr = nil
+	ta.setDrive(nil)
 }
 
 func (ta *testApp) eventNames() []string {
@@ -206,7 +207,7 @@ func TestDeleteDraftTouchesNoDriveFile(t *testing.T) {
 func TestDeleteWhileOfflineRecordsTombstoneAndRetries(t *testing.T) {
 	ta := newTestApp(t)
 	doc := ta.newPublishedPage(t, "Offline", "x\n", "")
-	client := ta.driveClient
+	client := ta.client()
 
 	ta.disconnect()
 	if err := ta.DeleteDocument(doc.ID); err != nil {
@@ -224,8 +225,7 @@ func TestDeleteWhileOfflineRecordsTombstoneAndRetries(t *testing.T) {
 	}
 
 	// Back online: the refresh must skip the file and retry the trash.
-	ta.driveClient = client
-	ta.syncMgr = drive.NewSyncManager(client, ta.db, ta.appDataDir)
+	ta.setDrive(client)
 	if err := ta.TriggerSync(); err != nil {
 		t.Fatalf("TriggerSync: %v", err)
 	}
@@ -340,5 +340,133 @@ func TestRefreshWithFailedSubfolderListingDeletesNothing(t *testing.T) {
 	}
 	if !contains(ta.titles(t), "Design/Inside") {
 		t.Fatalf("pages must survive a failed refresh: %v", ta.titles(t))
+	}
+}
+
+// === Item 5: a revoked sign-in ends the session cleanly ===
+
+// revokedTokenSource fails like Google's token endpoint does for a revoked
+// or expired refresh token.
+type revokedTokenSource struct{}
+
+func (revokedTokenSource) Token() (*oauth2.Token, error) {
+	return nil, &oauth2.RetrieveError{
+		Response:  &http.Response{StatusCode: http.StatusBadRequest},
+		Body:      []byte(`{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`),
+		ErrorCode: "invalid_grant",
+	}
+}
+
+// signIn writes credentials and a token to disk, as a real sign-in would.
+func (ta *testApp) signIn(t *testing.T) {
+	t.Helper()
+	creds := `{"installed":{"client_id":"cid.apps.googleusercontent.com","client_secret":"s"}}`
+	if err := ta.authMgr.SaveCredentials(creds); err != nil {
+		t.Fatalf("SaveCredentials: %v", err)
+	}
+	tok := `{"access_token":"a","refresh_token":"r","token_type":"Bearer"}`
+	os.WriteFile(filepath.Join(ta.appDataDir, "token.json"), []byte(tok), 0600)
+	os.WriteFile(filepath.Join(ta.appDataDir, "token_scope"), []byte("drive"), 0600)
+	if err := ta.authMgr.LoadCredentials(); err != nil || !ta.authMgr.HasValidToken() {
+		t.Fatalf("expected a loaded token, err=%v", err)
+	}
+}
+
+func TestRevokedTokenExpiresSessionOnDriveCall(t *testing.T) {
+	ta := newTestApp(t)
+	ta.signIn(t)
+	ta.connect(t, revokedTokenSource{})
+
+	err := ta.TriggerSync()
+	if err == nil || !strings.HasPrefix(err.Error(), "ERR_AUTH:") {
+		t.Fatalf("TriggerSync error = %v, want ERR_AUTH prefix", err)
+	}
+	if ta.client() != nil || ta.syncer() != nil {
+		t.Error("Drive client should be cleared")
+	}
+	if ta.authMgr.HasValidToken() {
+		t.Error("token should be cleared")
+	}
+	if _, statErr := os.Stat(filepath.Join(ta.appDataDir, "token.json")); !os.IsNotExist(statErr) {
+		t.Error("token.json should be deleted")
+	}
+	if names := ta.eventNames(); !contains(names, "auth:expired") {
+		t.Errorf("expected auth:expired event, got %v", names)
+	}
+
+	// Further calls fail cleanly without another event.
+	if _, err := ta.PublishDocument("nope"); err == nil || !strings.HasPrefix(err.Error(), "ERR_AUTH:") {
+		t.Errorf("PublishDocument after expiry = %v, want ERR_AUTH", err)
+	}
+	count := 0
+	for _, n := range ta.eventNames() {
+		if n == "auth:expired" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("auth:expired emitted %d times, want 1", count)
+	}
+}
+
+func TestGetAuthStatusReportsExpiredSignIn(t *testing.T) {
+	ta := newTestApp(t)
+	ta.signIn(t)
+	ta.connect(t, revokedTokenSource{})
+
+	st, err := ta.GetAuthStatus()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.IsSignedIn || !st.SessionExpired || !st.HasCredentials {
+		t.Errorf("status = %+v, want signed out, expired, credentials kept", st)
+	}
+}
+
+func TestGetAuthStatusOfflineStaysSignedIn(t *testing.T) {
+	ta := newTestApp(t)
+	ta.signIn(t)
+
+	st, _ := ta.GetAuthStatus()
+	if !st.IsSignedIn || st.UserEmail != "owner@example.com" {
+		t.Fatalf("online status = %+v", st)
+	}
+
+	ta.fake.Close() // network gone: connection refused
+	st, _ = ta.GetAuthStatus()
+	if !st.IsSignedIn || st.SessionExpired {
+		t.Errorf("offline must stay signed in, got %+v", st)
+	}
+	if st.UserEmail != "owner@example.com" || !st.Offline {
+		t.Errorf("offline status should report the cached email and Offline, got %+v", st)
+	}
+	if !ta.authMgr.HasValidToken() {
+		t.Error("offline must not clear the token")
+	}
+	if err := ta.TriggerSync(); err == nil || !strings.HasPrefix(err.Error(), "ERR_OFFLINE:") {
+		t.Errorf("TriggerSync offline = %v, want ERR_OFFLINE", err)
+	}
+	if ta.client() == nil {
+		t.Error("offline must keep the Drive client")
+	}
+}
+
+func TestImportDifferentCredentialsSignsOut(t *testing.T) {
+	ta := newTestApp(t)
+	ta.signIn(t)
+
+	// Same client again: stays signed in.
+	if err := ta.ImportCredentials(`{"installed":{"client_id":"cid.apps.googleusercontent.com","client_secret":"s"}}`); err != nil {
+		t.Fatal(err)
+	}
+	if !ta.authMgr.HasValidToken() {
+		t.Fatal("re-importing the same client must keep the sign-in")
+	}
+	// Different client: the token cannot work with it.
+	if err := ta.ImportCredentials(`{"installed":{"client_id":"other.apps.googleusercontent.com","client_secret":"s"}}`); err != nil {
+		t.Fatal(err)
+	}
+	if ta.authMgr.HasValidToken() || ta.client() != nil {
+		t.Error("switching OAuth client must sign out")
 	}
 }

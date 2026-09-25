@@ -1988,3 +1988,47 @@ html, body {
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-muted);
 }
+
+/* ========================================
+   Notices and account settings
+   ======================================== */
+
+.notice-text {
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.45;
+    margin: 0 0 16px;
+    text-align: left;
+}
+
+[data-theme="dark"] .notice-text,
+.dark-editor .notice-text {
+    background: #3a2e12;
+    border-color: #7c5e10;
+    color: #fcd34d;
+}
+
+.account-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.account-email {
+    font-size: 14px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-link {
+    align-self: flex-start;
+    padding: 0;
+    font-size: 13px;
+}

@@ -128,18 +128,20 @@
     async function routeToCorrectView() {
         try {
             var status = await window.go.main.App.GetAuthStatus();
+            authStatus = status;
 
             if (!status.hasCredentials) {
-                showView('view-credentials');
+                showCredentialsView(false);
                 return;
             }
             if (!status.isSignedIn) {
-                showView('view-signin');
+                showSigninView(status.sessionExpired ? SESSION_EXPIRED_TEXT : '');
                 return;
             }
 
             // Signed in — show user email everywhere
             var email = status.userEmail || '';
+            document.getElementById('settings-account-email').textContent = email || 'Signed in';
             document.getElementById('user-email-display').textContent = email;
             document.querySelectorAll('.user-badge').forEach(function (el) {
                 el.textContent = email;
@@ -174,17 +176,53 @@
             }
             try {
                 await window.go.main.App.ImportCredentials(json);
-                showView('view-signin');
+                document.getElementById('credentials-json').value = '';
+                // Same client as before keeps the sign-in; a new one needs a sign-in.
+                await routeToCorrectView();
             } catch (e) {
                 errEl.textContent = 'Error: ' + (e.message || e);
                 errEl.classList.remove('hidden');
             }
         });
 
+        document.getElementById('btn-credentials-back').addEventListener('click', routeToCorrectView);
+
         document.getElementById('link-gcp').addEventListener('click', function (e) {
             e.preventDefault();
             if (window.runtime) window.runtime.BrowserOpenURL('https://console.cloud.google.com/apis/credentials');
         });
+    }
+
+    var SESSION_EXPIRED_TEXT = 'Your Google sign-in expired. Sign in again to continue. Pages saved on this PC are safe.';
+    var authStatus = null;
+
+    // showCredentialsView opens the paste-your-credentials screen. canGoBack
+    // shows a Back link when credentials already exist (changing them).
+    function showCredentialsView(canGoBack) {
+        document.getElementById('credentials-error').classList.add('hidden');
+        document.getElementById('btn-credentials-back').classList.toggle('hidden', !canGoBack);
+        showView('view-credentials');
+    }
+
+    // showSigninView opens the sign-in screen, optionally with a notice
+    // explaining why (for example an expired sign-in).
+    function showSigninView(notice) {
+        var noticeEl = document.getElementById('signin-notice');
+        noticeEl.textContent = notice || '';
+        noticeEl.classList.toggle('hidden', !notice);
+        document.getElementById('signin-waiting').classList.add('hidden');
+        document.getElementById('signin-error').classList.add('hidden');
+        showView('view-signin');
+    }
+
+    // leaveEditor saves the open page and closes it and any modal, before
+    // switching to a screen outside the workspace (sign-in, credentials).
+    async function leaveEditor() {
+        if (currentDocId) {
+            try { await saveNow(); } catch (e) { /* saving is local; keep going */ }
+        }
+        currentDocId = null;
+        document.querySelectorAll('.modal-overlay').forEach(function (m) { m.classList.add('hidden'); });
     }
 
     // === Sign In View ===
@@ -206,7 +244,7 @@
 
         // Advanced: let power users provide their own OAuth credentials
         document.getElementById('btn-custom-credentials').addEventListener('click', function () {
-            showView('view-credentials');
+            showCredentialsView(true);
         });
 
         // Listen for auth completion from Wails event
@@ -214,6 +252,13 @@
             window.runtime.EventsOn('auth:complete', async function () {
                 await window.go.main.App.OnAuthComplete();
                 await routeToCorrectView();
+            });
+            // Google rejected the saved sign-in (revoked, or expired after 7 days
+            // while the consent screen is in Testing). Keep local work, then ask
+            // the user to sign in again.
+            window.runtime.EventsOn('auth:expired', async function () {
+                await leaveEditor();
+                showSigninView(SESSION_EXPIRED_TEXT);
             });
             window.runtime.EventsOn('auth:error', function (msg) {
                 var errEl = document.getElementById('signin-error');
@@ -376,8 +421,9 @@
     }
 
     async function doSignOut() {
+        await leaveEditor();
         await window.go.main.App.SignOut();
-        showView('view-signin');
+        showSigninView('');
     }
 
     function bindWorkspacesEvents() {
@@ -1032,6 +1078,12 @@
 
         document.getElementById('btn-close-settings').addEventListener('click', function () {
             document.getElementById('settings-modal').classList.add('hidden');
+        });
+
+        document.getElementById('btn-settings-signout').addEventListener('click', doSignOut);
+        document.getElementById('btn-settings-credentials').addEventListener('click', async function () {
+            await leaveEditor();
+            showCredentialsView(true);
         });
 
         document.getElementById('btn-save-settings').addEventListener('click', async function () {

@@ -70,15 +70,16 @@ The setup takes about 5 minutes and only needs to be done once. It's completely 
 5. Click **Save & Continue**
 6. Sign in with your Google account
 
-### Step 5: Add Test Users
+### Step 5: Set the consent screen to In production
 
-Your GCP project starts in "Testing" mode, which means only users you explicitly add can sign in. To add users:
+Your GCP project starts in **Testing** mode. In Testing, Google **expires every sign-in after 7 days**, so HexNote would ask you to sign in again every week, and only users you list as test users can sign in at all.
 
-1. Go to **APIs & Services** > **OAuth consent screen** > **Test users**
-2. Click **+ Add users**
-3. Enter email addresses (up to 100)
+1. Go to **APIs & Services** > **OAuth consent screen** (in newer consoles: **Google Auth Platform** > **Audience**)
+2. Under **Publishing status**, click **Publish app** so it reads **In production**
 
-To remove this restriction, submit your app for verification (free, takes 2-6 weeks).
+In production without Google verification, the sign-in page shows an "unverified app" warning (click **Advanced** > **Go to ...** to continue, since it is your own project) and the project stays limited to 100 users. The 7-day expiry goes away.
+
+If you prefer to stay in Testing, add everyone who will sign in under **Test users** (up to 100) and expect to sign in again weekly. If a sign-in expires, HexNote tells you and your pages saved on this PC stay safe.
 
 ---
 
@@ -135,23 +136,22 @@ Your data lives in:
 ```bash
 # Clone the repo
 git clone https://github.com/Demoneyejin/HexNote.git
-cd hexnote
-
-# Create your credentials file (see DIY Setup above for getting the values)
-cat > internal/drive/credentials.go << 'EOF'
-package drive
-
-func init() {
-    bundledClientID = "your-client-id.apps.googleusercontent.com"
-    bundledClientSecret = "your-client-secret"
-}
-EOF
+cd HexNote
 
 # Build
 wails build -ldflags "-s -w"
 ```
 
-The binary is at `build/bin/hexnote.exe`.
+The binary is at `build/bin/hexnote.exe`. It uses the bring-your-own-key setup described above: each user pastes their own OAuth client JSON on first launch. No credentials are compiled in.
+
+### Tests
+
+```bash
+go test ./...                                                  # Go: storage, sync, publish, auth (against an in-memory fake Drive)
+NODE_PATH=$(npm root -g) node --test frontend/test/*.test.js   # UI tests (needs Playwright + Chromium)
+```
+
+On Linux without the webview libraries, run the Go tests with `CGO_ENABLED=0`.
 
 ---
 

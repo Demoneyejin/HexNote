@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"strconv"
 
 	"hexnote/internal/models"
@@ -57,4 +58,25 @@ func (d *Database) UpdateSettings(s models.Settings) error {
 	}
 
 	return tx.Commit()
+}
+
+// GetSetting returns a free-form setting ("" when unset). Used for small
+// pieces of app state that are not user preferences, such as the last known
+// account email.
+func (d *Database) GetSetting(key string) (string, error) {
+	var value string
+	err := d.db.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return value, err
+}
+
+// SetSetting stores a free-form setting.
+func (d *Database) SetSetting(key, value string) error {
+	_, err := d.db.Exec(
+		"INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+		key, value,
+	)
+	return err
 }
