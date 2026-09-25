@@ -91,7 +91,7 @@ func (s *Server) Endpoint() string { return s.URL + "/drive/v3/" }
 // Tick advances the fake clock and returns the new time. Every write
 // advances it too, so modifiedTime values are strictly increasing.
 func (s *Server) tick() time.Time {
-	s.clock = s.clock.Add(time.Second)
+	s.clock = s.clock.Add(10 * time.Second)
 	return s.clock
 }
 

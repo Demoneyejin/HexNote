@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -557,7 +558,35 @@ func (a *App) TriggerSync() (*models.SyncSummary, error) {
 }
 
 // PublishDocument pushes a document (and its parent folders) to Google Drive.
+// If someone else changed the page on Drive since this PC last saw it, it
+// returns an ERR_CONFLICT error instead of overwriting their work; the UI
+// then offers ForcePublishDocument, DiscardLocalChanges or KeepBothVersions.
 func (a *App) PublishDocument(docID string) (*models.Document, error) {
+	return a.publish(docID, false)
+}
+
+// ForcePublishDocument publishes even if the Drive file changed since this
+// PC last saw it (the user chose to overwrite). Drive keeps the replaced
+// text as a revision in version history.
+func (a *App) ForcePublishDocument(docID string) (*models.Document, error) {
+	return a.publish(docID, true)
+}
+
+// conflictSkew absorbs clock differences in timestamps recorded before
+// DriveModifiedAt came from Drive itself.
+const conflictSkew = 2 * time.Second
+
+// conflictError describes a newer version on Drive as
+// ERR_CONFLICT: {"by": "<name>", "at": "<RFC3339 time>"}.
+func conflictError(info *drive.FileInfo) error {
+	payload, _ := json.Marshal(map[string]string{
+		"by": info.ModifiedBy,
+		"at": info.ModifiedTime.UTC().Format(time.RFC3339),
+	})
+	return fmt.Errorf("ERR_CONFLICT: %s", payload)
+}
+
+func (a *App) publish(docID string, force bool) (*models.Document, error) {
 	client := a.client()
 	if client == nil {
 		return nil, errNotSignedIn
@@ -596,23 +625,45 @@ func (a *App) PublishDocument(docID string) (*models.Document, error) {
 	} else {
 		// Publish document
 		fileName := doc.Title + ".md"
-		if doc.DriveFileID == "" {
-			fileID, err := client.CreateFile(fileName, driveFolderID, doc.Content)
+		fileID := doc.DriveFileID
+
+		if fileID != "" {
+			info, err := client.GetFileInfo(fileID)
+			switch {
+			case err != nil && drive.IsNotFound(err):
+				fileID = "" // deleted on Drive: publish as a new file
+			case err != nil:
+				return nil, a.driveErr("check the Drive file", err)
+			case info.Trashed:
+				fileID = "" // writing into the trash would hide the edit
+			case !force && doc.DriveModifiedAt != nil && info.ModifiedTime.After(doc.DriveModifiedAt.Add(conflictSkew)):
+				return nil, conflictError(info)
+			}
+		}
+
+		var modified time.Time
+		if fileID == "" {
+			newID, mt, err := client.CreateFile(fileName, driveFolderID, doc.Content)
 			if err != nil {
 				return nil, a.driveErr("create Drive file", err)
 			}
-			a.db.SetDriveFileID(doc.ID, fileID)
+			a.db.SetDriveFileID(doc.ID, newID)
+			modified = mt
 		} else {
-			if err := client.UpdateFile(doc.DriveFileID, fileName, doc.Content); err != nil {
+			mt, err := client.UpdateFile(fileID, fileName, doc.Content)
+			if err != nil {
 				return nil, a.driveErr("update Drive file", err)
 			}
+			modified = mt
 		}
+		a.db.SetDriveModifiedAt(doc.ID, modified)
 	}
 
 	// Mark as published
-	now := time.Now().UTC()
 	a.db.SetDocumentStatus(doc.ID, "published")
-	a.db.SetDriveModifiedAt(doc.ID, now)
+	if doc.IsFolder {
+		a.db.SetDriveModifiedAt(doc.ID, time.Now().UTC())
+	}
 	a.db.ClearDirty(doc.ID)
 
 	// Upload any images referenced in the content that haven't been synced
@@ -621,6 +672,65 @@ func (a *App) PublishDocument(docID string) (*models.Document, error) {
 	}
 
 	return a.db.GetDocument(docID)
+}
+
+// DiscardLocalChanges replaces the local page with the current version on
+// Drive ("Load theirs" after a publish conflict). Unpublished local edits
+// are lost.
+func (a *App) DiscardLocalChanges(docID string) (*models.Document, error) {
+	client := a.client()
+	if client == nil {
+		return nil, errNotSignedIn
+	}
+	doc, err := a.getValidatedDoc(docID)
+	if err != nil {
+		return nil, err
+	}
+	if doc.DriveFileID == "" || doc.IsFolder {
+		return nil, fmt.Errorf("ERR_INVALID: This page has no published version to load.")
+	}
+	info, err := client.GetFileInfo(doc.DriveFileID)
+	if err != nil {
+		return nil, a.driveErr("load the Drive version", err)
+	}
+	content, err := client.DownloadFile(doc.DriveFileID)
+	if err != nil {
+		return nil, a.driveErr("load the Drive version", err)
+	}
+	title := strings.TrimSuffix(info.Name, ".md")
+	if title == "" {
+		title = doc.Title
+	}
+	if err := a.db.UpdateDocumentFromSync(doc.ID, title, drive.LocalizeContent(content, doc.WorkspaceID)); err != nil {
+		return nil, err
+	}
+	a.db.SetDocumentStatus(doc.ID, "published")
+	a.db.SetDriveModifiedAt(doc.ID, info.ModifiedTime)
+	a.db.ClearDirty(doc.ID)
+	return a.db.GetDocument(doc.ID)
+}
+
+// KeepBothVersions resolves a publish conflict without losing anything: the
+// local text is saved as a new draft page "<title> (my version)" next to the
+// original, and the original takes the version on Drive. Returns the copy.
+func (a *App) KeepBothVersions(docID string) (*models.Document, error) {
+	doc, err := a.getValidatedDoc(docID)
+	if err != nil {
+		return nil, err
+	}
+	copyDoc, err := a.db.CreateDocument(doc.Title+" (my version)", doc.ParentID, doc.WorkspaceID, false)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := a.db.UpdateDocument(copyDoc.ID, copyDoc.Title, doc.Content); err != nil {
+		return nil, err
+	}
+	// The copy exists before the original is touched, so a failure below
+	// loses nothing.
+	if _, err := a.DiscardLocalChanges(docID); err != nil {
+		return nil, err
+	}
+	return a.db.GetDocument(copyDoc.ID)
 }
 
 // ensureParentFoldersPublished walks up the parent chain and creates any

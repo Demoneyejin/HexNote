@@ -30,12 +30,20 @@ export function DeleteWorkspace(arg1) {
   return window['go']['main']['App']['DeleteWorkspace'](arg1);
 }
 
+export function DiscardLocalChanges(arg1) {
+  return window['go']['main']['App']['DiscardLocalChanges'](arg1);
+}
+
 export function DumpLogs(arg1) {
   return window['go']['main']['App']['DumpLogs'](arg1);
 }
 
 export function ExportWorkspace() {
   return window['go']['main']['App']['ExportWorkspace']();
+}
+
+export function ForcePublishDocument(arg1) {
+  return window['go']['main']['App']['ForcePublishDocument'](arg1);
 }
 
 export function GetActiveWorkspace() {
@@ -88,6 +96,10 @@ export function GetWorkspaces() {
 
 export function ImportCredentials(arg1) {
   return window['go']['main']['App']['ImportCredentials'](arg1);
+}
+
+export function KeepBothVersions(arg1) {
+  return window['go']['main']['App']['KeepBothVersions'](arg1);
 }
 
 export function ListDriveFolders(arg1) {

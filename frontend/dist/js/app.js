@@ -1222,10 +1222,7 @@
         try {
             var doc = await window.go.main.App.GetDocument(id);
             if (id !== currentDocId || !isOpenPageClean()) return; // user moved on or started typing
-            document.getElementById('doc-title').value = doc.title;
-            editor.commands.setContent(doc.content || '', { emitUpdate: false });
-            markClean(doc.title);
-            setDocMeta(doc);
+            applyDocToEditor(doc);
         } catch (e) {
             console.error('reloadCurrentDoc:', errorMessage(e));
         }
@@ -1255,9 +1252,75 @@
             await loadTree();
             return true;
         } catch (e) {
+            if (errorCode(e) === 'ERR_CONFLICT') return resolveConflict(id, e);
             showError('publish', e, function () { publishDocument(id); });
             return false;
         }
+    }
+
+    // resolveConflict runs when Publish finds a newer version on Drive than
+    // the one this PC last saw. The user picks: overwrite theirs, load theirs
+    // (discarding local edits after a second confirmation), or keep both.
+    async function resolveConflict(id, e) {
+        var info = {};
+        try { info = JSON.parse(errorMessage(e).replace(/^ERR_CONFLICT:\s*/, '')); } catch (err) { /* keep defaults */ }
+        var who = info.by || 'Someone';
+        var when = info.at ? new Date(info.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+        var doc = findDoc(id);
+        var title = doc ? doc.title : 'this page';
+
+        var choice = await askChoice({
+            title: who + ' changed \u201c' + title + '\u201d on Drive',
+            body: who + ' published a newer version' + (when ? ' (' + when + ')' : '') +
+                ' after this PC last refreshed the page. Publishing now would replace their text with yours.',
+            choices: [
+                { id: 'conflict-theirs', label: 'Load theirs', value: 'theirs', kind: 'secondary' },
+                { id: 'conflict-both', label: 'Keep both', value: 'both', kind: 'primary' },
+                { id: 'conflict-overwrite', label: 'Overwrite theirs', value: 'overwrite', kind: 'danger' },
+            ],
+        });
+
+        try {
+            if (choice === 'overwrite') {
+                var pub = await window.go.main.App.ForcePublishDocument(id);
+                if (id === currentDocId) setDocMeta(pub);
+                await loadTree();
+                showToast('Published. ' + who + '\u2019s version is still in Version History.', 'success', 6000);
+                return true;
+            }
+            if (choice === 'theirs') {
+                var sure = await askConfirm('Discard your unpublished edits?',
+                    'Your changes to \u201c' + title + '\u201d are replaced by ' + who + '\u2019s version. They cannot be recovered.',
+                    'Discard my edits', true);
+                if (!sure) return false;
+                var theirs = await window.go.main.App.DiscardLocalChanges(id);
+                if (id === currentDocId) applyDocToEditor(theirs);
+                await loadTree();
+                showToast('Loaded ' + who + '\u2019s version', 'success');
+                return true;
+            }
+            if (choice === 'both') {
+                var mine = await window.go.main.App.KeepBothVersions(id);
+                if (id === currentDocId) applyDocToEditor(await window.go.main.App.GetDocument(id));
+                await loadTree();
+                showToast('Your text is saved as \u201c' + mine.title + '\u201d (not published yet).', 'success', 8000,
+                    { label: 'Open', run: function () { selectDocument(mine.id); } });
+                return true;
+            }
+        } catch (err) {
+            showError('resolve the conflict', err);
+        }
+        return false;
+    }
+
+    // applyDocToEditor shows a stored document in the editor as saved.
+    function applyDocToEditor(doc) {
+        clearTimeout(saveTimeout);
+        document.getElementById('doc-title').value = doc.title;
+        editor.commands.setContent(doc.content || '', { emitUpdate: false });
+        markClean(doc.title);
+        saveState = 'saved';
+        setDocMeta(doc);
     }
 
     // renameDocument changes only the title of a page or folder. A folder

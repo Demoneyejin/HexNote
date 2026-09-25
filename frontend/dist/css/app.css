@@ -2064,7 +2064,12 @@ html, body {
 }
 
 .confirm-content {
-    max-width: 440px;
+    max-width: 540px;
+}
+
+.confirm-actions button {
+    padding: 8px 16px;
+    white-space: nowrap;
 }
 
 #confirm-title {

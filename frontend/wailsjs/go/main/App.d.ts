@@ -16,9 +16,13 @@ export function DeleteLabel(arg1:string):Promise<void>;
 
 export function DeleteWorkspace(arg1:string):Promise<void>;
 
+export function DiscardLocalChanges(arg1:string):Promise<models.Document>;
+
 export function DumpLogs(arg1:string):Promise<string>;
 
 export function ExportWorkspace():Promise<string>;
+
+export function ForcePublishDocument(arg1:string):Promise<models.Document>;
 
 export function GetActiveWorkspace():Promise<models.Workspace>;
 
@@ -45,6 +49,8 @@ export function GetWorkspaceMembers(arg1:string):Promise<Array<models.WorkspaceM
 export function GetWorkspaces():Promise<Array<models.Workspace>>;
 
 export function ImportCredentials(arg1:string):Promise<void>;
+
+export function KeepBothVersions(arg1:string):Promise<models.Document>;
 
 export function ListDriveFolders(arg1:string):Promise<Array<models.DriveFolder>>;
 

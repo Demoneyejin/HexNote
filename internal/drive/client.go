@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"hexnote/internal/models"
 
@@ -181,7 +182,9 @@ func (c *Client) DownloadFile(fileID string) (string, error) {
 	return string(data), nil
 }
 
-func (c *Client) CreateFile(name, folderID, content string) (string, error) {
+// CreateFile uploads a new file and returns its ID and Drive's modifiedTime
+// for it (Drive's clock, so later conflict checks compare like with like).
+func (c *Client) CreateFile(name, folderID, content string) (string, time.Time, error) {
 	f := &drive.File{
 		Name:    name,
 		Parents: []string{folderID},
@@ -189,30 +192,71 @@ func (c *Client) CreateFile(name, folderID, content string) (string, error) {
 
 	created, err := c.service.Files.Create(f).
 		Media(strings.NewReader(content)).
-		Fields("id").
+		Fields("id, modifiedTime").
 		SupportsAllDrives(true).
 		Do()
 	if err != nil {
-		return "", fmt.Errorf("create file: %w", err)
+		return "", time.Time{}, fmt.Errorf("create file: %w", err)
 	}
 
-	return created.Id, nil
+	return created.Id, parseTimeOrNow(created.ModifiedTime), nil
 }
 
-func (c *Client) UpdateFile(fileID, name, content string) error {
+// UpdateFile replaces a file's name and content and returns Drive's new
+// modifiedTime for it.
+func (c *Client) UpdateFile(fileID, name, content string) (time.Time, error) {
 	f := &drive.File{
 		Name: name,
 	}
 
-	_, err := c.service.Files.Update(fileID, f).
+	updated, err := c.service.Files.Update(fileID, f).
 		Media(strings.NewReader(content)).
+		Fields("id, modifiedTime").
 		SupportsAllDrives(true).
 		Do()
 	if err != nil {
-		return fmt.Errorf("update file: %w", err)
+		return time.Time{}, fmt.Errorf("update file: %w", err)
 	}
 
-	return nil
+	return parseTimeOrNow(updated.ModifiedTime), nil
+}
+
+// FileInfo is the metadata used to detect conflicting edits before publishing.
+type FileInfo struct {
+	Name         string
+	ModifiedTime time.Time
+	ModifiedBy   string // display name of the last person to change the file
+	Trashed      bool
+}
+
+// GetFileInfo returns a file's current name, modifiedTime, last modifying
+// user and trash state.
+func (c *Client) GetFileInfo(fileID string) (*FileInfo, error) {
+	f, err := c.service.Files.Get(fileID).
+		Fields("name, modifiedTime, trashed, lastModifyingUser(displayName, emailAddress)").
+		SupportsAllDrives(true).
+		Do()
+	if err != nil {
+		return nil, fmt.Errorf("get file metadata: %w", err)
+	}
+	info := &FileInfo{Name: f.Name, Trashed: f.Trashed}
+	if t, err := ParseTime(f.ModifiedTime); err == nil {
+		info.ModifiedTime = t
+	}
+	if f.LastModifyingUser != nil {
+		info.ModifiedBy = f.LastModifyingUser.DisplayName
+		if info.ModifiedBy == "" {
+			info.ModifiedBy = f.LastModifyingUser.EmailAddress
+		}
+	}
+	return info, nil
+}
+
+func parseTimeOrNow(s string) time.Time {
+	if t, err := ParseTime(s); err == nil {
+		return t
+	}
+	return time.Now().UTC()
 }
 
 // RenameFile changes a file's or folder's name on Drive.
@@ -238,19 +282,6 @@ func (c *Client) TrashFile(fileID string) error {
 		return fmt.Errorf("trash file: %w", err)
 	}
 	return nil
-}
-
-// GetFileModifiedTime returns the current modifiedTime of a file on Drive.
-// Used before pushing to check if someone else modified the file since our last sync.
-func (c *Client) GetFileModifiedTime(fileID string) (string, error) {
-	f, err := c.service.Files.Get(fileID).
-		Fields("modifiedTime").
-		SupportsAllDrives(true).
-		Do()
-	if err != nil {
-		return "", fmt.Errorf("get file metadata: %w", err)
-	}
-	return f.ModifiedTime, nil
 }
 
 // Revisions / version history

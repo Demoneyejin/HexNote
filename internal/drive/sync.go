@@ -28,6 +28,15 @@ type SyncManager struct {
 // imagePathRe matches image references like /images/{uuid}/ in markdown content.
 var imagePathRe = regexp.MustCompile(`(/images/)[a-f0-9][-a-f0-9]*/`)
 
+// ParseTime parses a Google Drive timestamp.
+func ParseTime(s string) (time.Time, error) { return parseDriveTime(s) }
+
+// LocalizeContent prepares markdown downloaded from Drive for this PC
+// (image links point at this workspace's local image cache).
+func LocalizeContent(content, localWorkspaceID string) string {
+	return rewriteImagePaths(content, localWorkspaceID)
+}
+
 // parseDriveTime parses a Google Drive timestamp which may or may not have
 // fractional seconds. Go's time.RFC3339 rejects fractional seconds and
 // time.RFC3339Nano requires them, so we try both.

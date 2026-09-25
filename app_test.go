@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -656,5 +658,137 @@ func TestUpdateSettingsClampsInterval(t *testing.T) {
 		if s.SyncIntervalSecs != tc.want {
 			t.Errorf("UpdateSettings(%d) stored %d, want %d", tc.in, s.SyncIntervalSecs, tc.want)
 		}
+	}
+}
+
+// === Item 9: publish never silently overwrites a teammate's edit ===
+
+func TestPublishTwiceByMeIsNotAConflict(t *testing.T) {
+	ta := newTestApp(t)
+	doc := ta.newPublishedPage(t, "Roadmap", "v1\n", "")
+	for i := 2; i <= 3; i++ {
+		ta.UpdateDocument(doc.ID, "Roadmap", fmt.Sprintf("v%d\n", i))
+		if _, err := ta.PublishDocument(doc.ID); err != nil {
+			t.Fatalf("publish #%d: %v", i, err)
+		}
+	}
+	if got := string(ta.fake.Get(doc.DriveFileID).Content); got != "v3\n" {
+		t.Errorf("Drive content = %q", got)
+	}
+}
+
+func TestPublishDetectsTeammateEdit(t *testing.T) {
+	ta := newTestApp(t)
+	doc := ta.newPublishedPage(t, "Roadmap", "v1\n", "")
+	ta.fake.Edit(doc.DriveFileID, "Sam's version\n", "Sam Rivera")
+	ta.UpdateDocument(doc.ID, "Roadmap", "my version\n")
+
+	_, err := ta.PublishDocument(doc.ID)
+	if err == nil || !strings.HasPrefix(err.Error(), "ERR_CONFLICT: ") {
+		t.Fatalf("PublishDocument = %v, want ERR_CONFLICT", err)
+	}
+	var payload map[string]string
+	if jerr := json.Unmarshal([]byte(strings.TrimPrefix(err.Error(), "ERR_CONFLICT: ")), &payload); jerr != nil {
+		t.Fatalf("conflict payload is not JSON: %v", jerr)
+	}
+	if payload["by"] != "Sam Rivera" || payload["at"] == "" {
+		t.Errorf("payload = %v", payload)
+	}
+	if got := string(ta.fake.Get(doc.DriveFileID).Content); got != "Sam's version\n" {
+		t.Fatalf("Drive must keep Sam's text, got %q", got)
+	}
+	if d, _ := ta.GetDocument(doc.ID); d.Status != "draft" || d.Content != "my version\n" {
+		t.Errorf("local page must keep my edits as a draft, got %+v", d)
+	}
+}
+
+func TestForcePublishOverwrites(t *testing.T) {
+	ta := newTestApp(t)
+	doc := ta.newPublishedPage(t, "Roadmap", "v1\n", "")
+	ta.fake.Edit(doc.DriveFileID, "Sam's version\n", "Sam")
+	ta.UpdateDocument(doc.ID, "Roadmap", "mine\n")
+
+	pub, err := ta.ForcePublishDocument(doc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ta.fake.Get(doc.DriveFileID).Content) != "mine\n" || pub.Status != "published" {
+		t.Error("force publish should overwrite and mark published")
+	}
+	// Sam's text is still in Drive's version history.
+	revs, _ := ta.GetVersionHistory(doc.ID)
+	found := false
+	for _, r := range revs {
+		if c, _ := ta.PreviewRevision(doc.ID, r.RevisionID); c == "Sam's version\n" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("overwritten text should remain in version history")
+	}
+	// The next normal publish is not a conflict.
+	ta.UpdateDocument(doc.ID, "Roadmap", "mine 2\n")
+	if _, err := ta.PublishDocument(doc.ID); err != nil {
+		t.Errorf("publish after overwrite: %v", err)
+	}
+}
+
+func TestDiscardLocalChangesLoadsTheirs(t *testing.T) {
+	ta := newTestApp(t)
+	doc := ta.newPublishedPage(t, "Roadmap", "v1\n", "")
+	ta.fake.Edit(doc.DriveFileID, "Sam's version\n", "Sam")
+	ta.UpdateDocument(doc.ID, "Roadmap", "mine\n")
+
+	got, err := ta.DiscardLocalChanges(doc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Content != "Sam's version\n" || got.Status != "published" {
+		t.Errorf("got %+v", got)
+	}
+	// Subsequent edit + publish is clean.
+	ta.UpdateDocument(doc.ID, "Roadmap", "after\n")
+	if _, err := ta.PublishDocument(doc.ID); err != nil {
+		t.Errorf("publish after load-theirs: %v", err)
+	}
+}
+
+func TestKeepBothVersions(t *testing.T) {
+	ta := newTestApp(t)
+	folder, _ := ta.CreateDocument("Design", "", true)
+	doc := ta.newPublishedPage(t, "Roadmap", "v1\n", folder.ID)
+	ta.fake.Edit(doc.DriveFileID, "Sam's version\n", "Sam")
+	ta.UpdateDocument(doc.ID, "Roadmap", "mine\n")
+
+	mine, err := ta.KeepBothVersions(doc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mine.Title != "Roadmap (my version)" || mine.Content != "mine\n" || mine.Status != "draft" || mine.ParentID != folder.ID || mine.DriveFileID != "" {
+		t.Errorf("copy = %+v", mine)
+	}
+	orig, _ := ta.GetDocument(doc.ID)
+	if orig.Content != "Sam's version\n" || orig.Status != "published" {
+		t.Errorf("original = %+v", orig)
+	}
+}
+
+func TestPublishIntoTrashedFileCreatesNewFile(t *testing.T) {
+	ta := newTestApp(t)
+	doc := ta.newPublishedPage(t, "Roadmap", "v1\n", "")
+	ta.fake.Mu.Lock()
+	ta.fake.Files[doc.DriveFileID].Trashed = true
+	ta.fake.Mu.Unlock()
+	ta.UpdateDocument(doc.ID, "Roadmap", "v2\n")
+
+	pub, err := ta.PublishDocument(doc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pub.DriveFileID == doc.DriveFileID {
+		t.Fatal("should publish to a new file, not into the trash")
+	}
+	if f := ta.fake.Get(pub.DriveFileID); f == nil || f.Trashed || string(f.Content) != "v2\n" {
+		t.Errorf("new file = %+v", f)
 	}
 }
