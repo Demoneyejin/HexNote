@@ -909,6 +909,17 @@ html, body {
     background: var(--danger-hover);
 }
 
+/* Icon buttons that are also marked danger (delete page, remove member)
+   keep the icon-button shape. Without this, .btn-danger above wins on
+   source order: its padding collapses the icon to zero width and its red
+   fill turns the button into a solid block. The red appears on hover only
+   (see .btn-icon.btn-danger:hover). */
+.btn-icon.btn-danger {
+    padding: 0;
+    background: transparent;
+    color: var(--text-muted);
+}
+
 .text-muted {
     color: var(--text-muted);
     font-size: 12px;
