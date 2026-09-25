@@ -17,6 +17,7 @@ import (
 	"hexnote/internal/storage"
 
 	"golang.org/x/oauth2"
+	gdrive "google.golang.org/api/drive/v3"
 )
 
 // testApp is an App wired to a temp SQLite DB and a fake Drive server.
@@ -987,5 +988,30 @@ func TestRestoreVersionLocalizesImages(t *testing.T) {
 	}
 	if restored.Content != local {
 		t.Errorf("restored content = %q, want %q", restored.Content, local)
+	}
+}
+
+// === Item 14: workspace access tag ===
+
+func TestGetWorkspacesReportsAccess(t *testing.T) {
+	ta := newTestApp(t)
+	list, _ := ta.GetWorkspaces()
+	if list[0].Access != "" {
+		t.Errorf("access unknown before members load, got %q", list[0].Access)
+	}
+	ta.signIn(t)
+	ta.GetAuthStatus() // caches the account email (owner@example.com)
+	ta.fake.Mu.Lock()
+	ta.fake.Permissions["root-folder"] = []*gdrive.Permission{
+		{Id: "p1", Type: "user", Role: "owner", EmailAddress: "Owner@Example.com"},
+		{Id: "p2", Type: "user", Role: "writer", EmailAddress: "sam@example.com"},
+	}
+	ta.fake.Mu.Unlock()
+	if _, err := ta.GetWorkspaceMembers(ta.ws.ID); err != nil {
+		t.Fatal(err)
+	}
+	list, _ = ta.GetWorkspaces()
+	if list[0].Access != "owner" {
+		t.Errorf("access = %q, want owner", list[0].Access)
 	}
 }

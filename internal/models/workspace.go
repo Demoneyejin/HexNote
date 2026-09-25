@@ -31,6 +31,10 @@ type Workspace struct {
 	LastSyncedAt   *time.Time `json:"lastSyncedAt,omitempty"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	IsActive       bool       `json:"isActive"`
+	// Access is the signed-in user's role on the Drive folder ("owner",
+	// "writer", "reader"), or "" when not known yet. It comes from the
+	// cached member list, filled whenever members are loaded.
+	Access string `json:"access,omitempty"`
 }
 
 // WorkspaceMember represents a collaborator with Drive permissions

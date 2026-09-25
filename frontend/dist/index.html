@@ -169,8 +169,11 @@
             <aside id="sidebar">
                 <div class="sidebar-header">
                     <div class="sidebar-title-row">
-                        <button id="btn-back-ws" class="btn-back" title="Back to Workspaces">&larr;</button>
+                        <button id="btn-back-ws" class="btn-back" title="Back to Workspaces" aria-label="Back to Workspaces">&larr;</button>
                         <h1 class="app-title" id="workspace-title">Workspace</h1>
+                        <button id="btn-open-drive" class="btn-icon btn-open-drive" title="Open this workspace's folder in Google Drive" aria-label="Open in Google Drive">
+                            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
                     </div>
                     <div class="sidebar-actions">
                         <button id="btn-sync" class="btn-icon" title="Refresh from Drive: get pages your teammates published">
@@ -341,6 +344,7 @@
     <!-- Workspace context menu -->
     <div id="ws-context-menu" class="context-menu hidden">
         <button data-action="ws-open">Open</button>
+        <button data-action="ws-drive">Open in Google Drive</button>
         <button data-action="ws-rename">Rename</button>
         <button data-action="ws-permissions">Permissions</button>
         <hr>

@@ -251,8 +251,30 @@ func (a *App) SignOut() error {
 
 // === Workspace methods ===
 
+// GetWorkspaces lists workspaces with the user's access on each, where the
+// cached member list knows it.
 func (a *App) GetWorkspaces() ([]models.Workspace, error) {
-	return a.db.GetWorkspaces()
+	list, err := a.db.GetWorkspaces()
+	if err != nil {
+		return nil, err
+	}
+	email, _ := a.db.GetSetting("accountEmail")
+	if email == "" {
+		return list, nil
+	}
+	for i := range list {
+		members, err := a.db.GetWorkspaceMembers(list[i].ID)
+		if err != nil {
+			continue
+		}
+		for _, m := range members {
+			if strings.EqualFold(m.Email, email) {
+				list[i].Access = m.Role
+				break
+			}
+		}
+	}
+	return list, nil
 }
 
 func (a *App) GetActiveWorkspace() (*models.Workspace, error) {

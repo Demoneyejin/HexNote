@@ -80,6 +80,7 @@ export namespace models {
 	    lastSyncedAt?: any;
 	    createdAt: any;
 	    isActive: boolean;
+	    access?: string;
 	}
 
 	export interface WorkspaceMember {

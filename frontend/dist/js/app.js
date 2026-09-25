@@ -505,16 +505,37 @@
         }
 
         noWs.classList.add('hidden');
+        knownWorkspaces = workspaces;
         grid.innerHTML = workspaces.map(function (ws) {
-            var synced = ws.lastSyncedAt ? 'Last synced: ' + new Date(ws.lastSyncedAt).toLocaleString() : 'Never synced';
-            return '<div class="workspace-card" data-id="' + ws.id + '" data-name="' + escapeHtml(ws.name) + '">' +
+            var synced = ws.lastSyncedAt ? 'Refreshed from Drive ' + new Date(ws.lastSyncedAt).toLocaleString() : 'Not refreshed yet';
+            var tag = '';
+            if (ws.access === 'owner') tag = '<span class="ws-tag ws-tag-owner" title="You own this Google Drive folder">Owner</span>';
+            else if (ws.access === 'writer') tag = '<span class="ws-tag" title="Shared with you; you can edit">Shared \u00b7 Editor</span>';
+            else if (ws.access === 'reader' || ws.access === 'commenter') tag = '<span class="ws-tag" title="Shared with you; you can view">Shared \u00b7 Viewer</span>';
+            return '<div class="workspace-card" tabindex="0" role="button" data-id="' + escapeHtml(ws.id) + '" data-name="' + escapeHtml(ws.name) + '" aria-label="Open workspace ' + escapeHtml(ws.name) + '">' +
                 '<div class="workspace-card-body">' +
                 '<h3>' + escapeHtml(ws.name) + '</h3>' +
                 '<p class="workspace-meta">' + synced + '</p>' +
                 '</div>' +
-                '<button class="ws-menu-btn" data-id="' + ws.id + '" data-name="' + escapeHtml(ws.name) + '" title="Options">\u22EE</button>' +
+                '<div class="workspace-card-footer">' + tag +
+                (ws.driveFolderUrl ? '<button class="ws-drive-link btn-link" data-url="' + escapeHtml(ws.driveFolderUrl) + '">Open in Drive</button>' : '') +
+                '</div>' +
+                '<button class="ws-menu-btn" data-id="' + escapeHtml(ws.id) + '" data-name="' + escapeHtml(ws.name) + '" title="Options" aria-label="Options for ' + escapeHtml(ws.name) + '">\u22EE</button>' +
                 '</div>';
         }).join('');
+
+        grid.querySelectorAll('.ws-drive-link').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (window.runtime) window.runtime.BrowserOpenURL(btn.dataset.url);
+            });
+        });
+        grid.querySelectorAll('.workspace-card').forEach(function (card) {
+            card.addEventListener('keydown', function (e) {
+                if (e.target !== card) return;
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openWorkspace(card.dataset.id); }
+            });
+        });
 
         // Click card body → open workspace
         grid.querySelectorAll('.workspace-card').forEach(function (card) {
@@ -584,6 +605,7 @@
         input.addEventListener('click', function (e) { e.stopPropagation(); });
     }
 
+    var knownWorkspaces = [];
     var wsContextTargetId = null;
     var wsContextTargetName = null;
 
@@ -597,6 +619,7 @@
 
         var isCard = !!wsId;
         menu.querySelector('[data-action="ws-open"]').style.display = isCard ? '' : 'none';
+        menu.querySelector('[data-action="ws-drive"]').style.display = isCard ? '' : 'none';
         menu.querySelector('[data-action="ws-rename"]').style.display = isCard ? '' : 'none';
         menu.querySelector('[data-action="ws-permissions"]').style.display = isCard ? '' : 'none';
         menu.querySelector('[data-action="ws-delete"]').style.display = isCard ? '' : 'none';
@@ -611,6 +634,10 @@
         switch (action) {
             case 'ws-open':
                 if (wsContextTargetId) openWorkspace(wsContextTargetId);
+                break;
+            case 'ws-drive':
+                var target = knownWorkspaces.filter(function (w) { return w.id === wsContextTargetId; })[0];
+                if (target && target.driveFolderUrl && window.runtime) window.runtime.BrowserOpenURL(target.driveFolderUrl);
                 break;
             case 'ws-rename':
                 if (!wsContextTargetId) break;
@@ -679,6 +706,9 @@
             await loadTree();
             // Pull published pages from Drive
             triggerSync({ quiet: true });
+            // Refresh the member cache quietly so workspace cards can show
+            // whether this folder is yours or shared with you.
+            window.go.main.App.GetWorkspaceMembers(activeWorkspace.id).catch(function () { /* optional */ });
         } catch (e) {
             showError('open the workspace', e);
         }
@@ -1169,6 +1199,7 @@
         });
 
         document.getElementById('btn-sync').addEventListener('click', function () { triggerSync(); });
+        document.getElementById('btn-open-drive').addEventListener('click', openWorkspaceInDrive);
         document.getElementById('btn-publish').addEventListener('click', publishCurrentDoc);
 
         document.getElementById('btn-share').addEventListener('click', function () {
