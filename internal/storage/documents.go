@@ -84,6 +84,24 @@ func (d *Database) UpdateDocument(id, title, content string) (*models.Document, 
 	return doc, nil
 }
 
+// RenameDocument changes only the title. The caller decides the status.
+func (d *Database) RenameDocument(id, title string) error {
+	res, err := d.db.Exec(
+		`UPDATE documents SET title = ?, is_dirty = 1, updated_at = ? WHERE id = ?`,
+		title, formatTime(time.Now().UTC()), id,
+	)
+	if err != nil {
+		return fmt.Errorf("rename document: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	if doc, err := d.GetDocument(id); err == nil {
+		d.indexDocument(doc)
+	}
+	return nil
+}
+
 func (d *Database) DeleteDocument(id string) error {
 	// Recursively delete children first
 	rows, err := d.db.Query("SELECT id FROM documents WHERE parent_id = ?", id)

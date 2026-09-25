@@ -294,6 +294,13 @@ func (sm *SyncManager) pullFolder(run *pullRun, driveFolderID string, localParen
 				sm.downloadToImageCacheIfMissing(workspace.ID, f.Name, f.Id)
 			}
 
+			// A teammate renamed the folder. A local rename that has not
+			// reached Drive yet (status draft) wins until it is published.
+			if isFolder && f.Name != localDoc.Title && localDoc.Status == "published" {
+				sm.db.UpdateDocumentFromSync(localDoc.ID, f.Name, "")
+				run.result.UpdatedIDs = append(run.result.UpdatedIDs, localDoc.ID)
+			}
+
 			if isFolder {
 				if err := sm.pullFolder(run, f.Id, localDoc.ID); err != nil {
 					return err

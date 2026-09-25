@@ -470,3 +470,116 @@ func TestImportDifferentCredentialsSignsOut(t *testing.T) {
 		t.Error("switching OAuth client must sign out")
 	}
 }
+
+// === Item 6: folder renames reach Drive ===
+
+func (ta *testApp) publishedFolder(t *testing.T, title string) *models.Document {
+	t.Helper()
+	folder, _ := ta.CreateDocument(title, "", true)
+	if _, err := ta.PublishDocument(folder.ID); err != nil {
+		t.Fatalf("PublishDocument(folder): %v", err)
+	}
+	doc, _ := ta.GetDocument(folder.ID)
+	return doc
+}
+
+func TestRenamePublishedFolderPushesImmediately(t *testing.T) {
+	ta := newTestApp(t)
+	folder := ta.publishedFolder(t, "Design")
+
+	got, err := ta.RenameDocument(folder.ID, "Art Direction")
+	if err != nil {
+		t.Fatalf("RenameDocument: %v", err)
+	}
+	if got.Status != "published" || got.Title != "Art Direction" {
+		t.Errorf("folder should stay published with new title, got %+v", got)
+	}
+	if name := ta.fake.Get(folder.DriveFileID).Name; name != "Art Direction" {
+		t.Errorf("Drive folder name = %q, want Art Direction", name)
+	}
+}
+
+func TestRenameFolderOfflineBecomesDraftThenPublishes(t *testing.T) {
+	ta := newTestApp(t)
+	folder := ta.publishedFolder(t, "Design")
+	client := ta.client()
+
+	ta.setDrive(nil)
+	got, err := ta.RenameDocument(folder.ID, "Art Direction")
+	if err != nil {
+		t.Fatalf("RenameDocument offline: %v", err)
+	}
+	if got.Status != "draft" {
+		t.Errorf("offline rename should leave the folder as draft, got %s", got.Status)
+	}
+	if ta.fake.Get(folder.DriveFileID).Name != "Design" {
+		t.Fatal("Drive must not change while offline")
+	}
+
+	// A refresh must not undo the pending local rename.
+	ta.setDrive(client)
+	if err := ta.TriggerSync(); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := ta.GetDocument(folder.ID); d.Title != "Art Direction" {
+		t.Errorf("refresh reverted the pending rename: %q", d.Title)
+	}
+
+	pub, err := ta.PublishDocument(folder.ID)
+	if err != nil {
+		t.Fatalf("PublishDocument: %v", err)
+	}
+	if pub.Status != "published" || ta.fake.Get(folder.DriveFileID).Name != "Art Direction" {
+		t.Errorf("publish should push the rename, got status %s, Drive name %q", pub.Status, ta.fake.Get(folder.DriveFileID).Name)
+	}
+}
+
+func TestPublishingChildPushesPendingParentRename(t *testing.T) {
+	ta := newTestApp(t)
+	folder := ta.publishedFolder(t, "Design")
+	client := ta.client()
+	ta.setDrive(nil)
+	ta.RenameDocument(folder.ID, "Art Direction")
+	ta.setDrive(client)
+
+	ta.newPublishedPage(t, "Palette", "x\n", folder.ID)
+	if ta.fake.Get(folder.DriveFileID).Name != "Art Direction" {
+		t.Error("publishing a child should push the parent's pending rename")
+	}
+	if d, _ := ta.GetDocument(folder.ID); d.Status != "published" {
+		t.Errorf("parent status = %s, want published", d.Status)
+	}
+}
+
+func TestRenamePageIsTitleOnlyDraft(t *testing.T) {
+	ta := newTestApp(t)
+	page := ta.newPublishedPage(t, "Roadmap", "body text\n", "")
+	got, err := ta.RenameDocument(page.ID, "  Roadmap 2027 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "Roadmap 2027" || got.Content != "body text\n" || got.Status != "draft" {
+		t.Errorf("got %+v", got)
+	}
+	if ta.fake.Get(page.DriveFileID).Name != "Roadmap.md" {
+		t.Error("a page rename waits for Publish")
+	}
+	if _, err := ta.RenameDocument(page.ID, "   "); err == nil {
+		t.Error("empty title must be rejected")
+	}
+}
+
+func TestRefreshPicksUpTeammateFolderRename(t *testing.T) {
+	ta := newTestApp(t)
+	folder := ta.publishedFolder(t, "Design")
+	ta.fake.Mu.Lock()
+	ta.fake.Files[folder.DriveFileID].Name = "Renamed by Sam"
+	ta.fake.Mu.Unlock()
+
+	if err := ta.TriggerSync(); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := ta.GetDocument(folder.ID); d.Title != "Renamed by Sam" || d.Status != "published" {
+		t.Errorf("folder = %+v, want teammate's name", d)
+	}
+}

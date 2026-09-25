@@ -143,9 +143,11 @@
             var d = requireDoc(id);
             d.title = title;
             if (d.isFolder && d.driveFileId) {
-                return clone(d);
+                // Published folders push the rename at once unless offline.
+                d.status = S.offline ? 'draft' : 'published';
+            } else if (!d.isFolder) {
+                d.status = 'draft';
             }
-            d.status = 'draft';
             return clone(d);
         },
         DeleteDocument: function (id) {

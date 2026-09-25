@@ -921,20 +921,53 @@
 
     async function publishCurrentDoc() {
         if (!currentDocId) return;
-        await saveNow();
         var btn = document.getElementById('btn-publish');
         btn.disabled = true;
         btn.textContent = 'Publishing...';
         try {
-            var doc = await window.go.main.App.PublishDocument(currentDocId);
-            showToast('Published to Drive', 'success');
-            btn.style.display = 'none';
-            await loadTree();
-        } catch (e) {
-            showToast('Publish failed: ' + (e.message || e), 'error');
+            if (await publishDocument(currentDocId)) btn.style.display = 'none';
         } finally {
             btn.disabled = false;
             btn.textContent = 'Publish';
+        }
+    }
+
+    // publishDocument publishes a page or folder (saving the open page first)
+    // and reports whether it succeeded.
+    async function publishDocument(id) {
+        if (id === currentDocId) await saveNow();
+        try {
+            var doc = await window.go.main.App.PublishDocument(id);
+            showToast(doc && doc.isFolder ? 'Folder published to Drive' : 'Published to Drive', 'success');
+            await loadTree();
+            return true;
+        } catch (e) {
+            showToast('Publish failed: ' + (e.message || e), 'error');
+            return false;
+        }
+    }
+
+    // renameDocument changes only the title of a page or folder. A folder
+    // rename goes to Drive right away when possible.
+    async function renameDocument(doc, title) {
+        var isCurrent = currentDocId === doc.id;
+        // Flush pending body edits first so the rename cannot race them.
+        if (isCurrent) await saveNow();
+        try {
+            var updated = await window.go.main.App.RenameDocument(doc.id, title);
+            if (isCurrent) {
+                document.getElementById('doc-title').value = updated.title;
+                lastKnownTitle = updated.title;
+                var publishBtn = document.getElementById('btn-publish');
+                publishBtn.style.display = updated.status === 'draft' ? '' : 'none';
+                publishBtn.textContent = updated.driveFileId ? 'Publish Changes' : 'Publish';
+            }
+            if (updated.isFolder && updated.driveFileId && updated.status === 'draft') {
+                showToast('Renamed on this PC. Publish the folder to rename it on Drive.', 'warning', 6000);
+            }
+            await loadTree();
+        } catch (e) {
+            showToast('Rename failed: ' + (e.message || e), 'error');
         }
     }
 
@@ -1152,12 +1185,14 @@
             : '<span class="tree-toggle invisible">\u25B6</span>';
 
         var statusBadge = '';
-        if (!doc.isFolder) {
-            if (doc.status === 'draft' && doc.driveFileId) {
-                statusBadge = '<span class="tree-badge badge-modified" title="Unpublished changes">Modified</span>';
-            } else if (doc.status === 'draft') {
-                statusBadge = '<span class="tree-badge badge-draft" title="Draft">Draft</span>';
-            }
+        if (doc.status === 'draft' && doc.driveFileId) {
+            statusBadge = doc.isFolder
+                ? '<span class="tree-badge badge-modified" title="Renamed on this PC only. Publish the folder to rename it on Drive.">Renamed</span>'
+                : '<span class="tree-badge badge-modified" title="Unpublished changes">Modified</span>';
+        } else if (doc.status === 'draft') {
+            statusBadge = doc.isFolder
+                ? '<span class="tree-badge badge-draft" title="Not on Drive yet. It is created there when you publish a page inside it.">Draft</span>'
+                : '<span class="tree-badge badge-draft" title="Draft">Draft</span>';
         }
         el.innerHTML = toggle + '<span class="tree-icon">' + icon + '</span><span class="tree-label">' + escapeHtml(doc.title || 'Untitled') + '</span>' + statusBadge;
 
@@ -1399,6 +1434,11 @@
         menu.querySelector('[data-action="new-folder"]').style.display = '';
         // Rename/Delete: only show on actual items, not root
         menu.querySelector('[data-action="rename"]').style.display = isRoot ? 'none' : '';
+        // Publish: drafts only (a renamed folder is a draft until its name reaches Drive)
+        var publishItem = menu.querySelector('[data-action="publish"]');
+        var canPublish = !isRoot && doc.status === 'draft';
+        publishItem.style.display = canPublish ? '' : 'none';
+        publishItem.textContent = (isFolder && doc.driveFileId) ? 'Publish rename' : (doc && doc.driveFileId ? 'Publish changes' : 'Publish');
         menu.querySelector('[data-action="delete"]').style.display = isRoot ? 'none' : '';
         // Hide the separator if only showing new-page/new-folder
         menu.querySelector('hr').style.display = isRoot ? 'none' : '';
@@ -1418,18 +1458,11 @@
             case 'rename':
                 if (!contextTarget) break;
                 var newTitle = prompt('Rename:', contextTarget.title);
-                if (newTitle && newTitle.trim()) {
-                    if (currentDocId === contextTarget.id) {
-                        // Renaming the open page: route through saveNow so the
-                        // editor's (possibly unsaved) body goes with the new title
-                        // instead of the tree's stale copy of the content.
-                        document.getElementById('doc-title').value = newTitle.trim();
-                        await saveNow();
-                    } else {
-                        await window.go.main.App.UpdateDocument(contextTarget.id, newTitle.trim(), contextTarget.content || '');
-                    }
-                    await loadTree();
-                }
+                if (newTitle && newTitle.trim()) await renameDocument(contextTarget, newTitle.trim());
+                break;
+            case 'publish':
+                if (!contextTarget) break;
+                await publishDocument(contextTarget.id);
                 break;
             case 'delete':
                 if (!contextTarget) break;

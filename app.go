@@ -338,6 +338,44 @@ func (a *App) UpdateDocument(id string, title string, content string) (*models.D
 	return a.db.UpdateDocument(id, title, content)
 }
 
+// RenameDocument changes only a document's title, so it can never overwrite
+// body edits. A page becomes a draft (the new name reaches Drive when it is
+// published). A folder has no content worth holding back, so a published
+// folder's rename is pushed to Drive right away; if that is not possible now
+// (offline, signed out) the folder becomes a draft and can be published later.
+func (a *App) RenameDocument(id string, title string) (*models.Document, error) {
+	doc, err := a.getValidatedDoc(id)
+	if err != nil {
+		return nil, err
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, fmt.Errorf("title cannot be empty")
+	}
+	if err := a.db.RenameDocument(id, title); err != nil {
+		return nil, err
+	}
+
+	if !doc.IsFolder || doc.DriveFileID == "" {
+		if !doc.IsFolder {
+			a.db.SetDocumentStatus(id, "draft")
+		}
+		return a.db.GetDocument(id)
+	}
+
+	status := "draft"
+	if client := a.client(); client != nil {
+		if err := client.RenameFile(doc.DriveFileID, title); err == nil {
+			status = "published"
+		} else {
+			// Keep the local rename; the folder shows as unpublished.
+			a.driveErr("rename Drive folder", err)
+		}
+	}
+	a.db.SetDocumentStatus(id, status)
+	return a.db.GetDocument(id)
+}
+
 // DeleteDocument deletes a page (or folder and its contents) locally and moves
 // its Drive file to the Drive trash, so the page does not come back on the
 // next refresh here or on a teammate's PC. If the trash call cannot be made
@@ -544,6 +582,10 @@ func (a *App) PublishDocument(docID string) (*models.Document, error) {
 				return nil, a.driveErr("create Drive folder", err)
 			}
 			a.db.SetDriveFileID(doc.ID, folder.ID)
+		} else if err := client.RenameFile(doc.DriveFileID, doc.Title); err != nil {
+			// A published folder is only a draft after a rename that could
+			// not be pushed; publishing it pushes the name.
+			return nil, a.driveErr("rename Drive folder", err)
 		}
 	} else {
 		// Publish document
@@ -583,8 +625,14 @@ func (a *App) ensureParentFoldersPublished(client *drive.Client, parentID string
 		return ws.DriveFolderID, nil
 	}
 
-	// If parent already has a DriveFileID, use it
+	// If parent already has a DriveFileID, use it (pushing a pending
+	// rename first, best effort: the child can be published either way)
 	if parent.DriveFileID != "" {
+		if parent.Status == "draft" {
+			if err := client.RenameFile(parent.DriveFileID, parent.Title); err == nil {
+				a.db.SetDocumentStatus(parent.ID, "published")
+			}
+		}
 		return parent.DriveFileID, nil
 	}
 

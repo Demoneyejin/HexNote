@@ -215,6 +215,18 @@ func (c *Client) UpdateFile(fileID, name, content string) error {
 	return nil
 }
 
+// RenameFile changes a file's or folder's name on Drive.
+func (c *Client) RenameFile(fileID, name string) error {
+	_, err := c.service.Files.Update(fileID, &drive.File{Name: name}).
+		Fields("id").
+		SupportsAllDrives(true).
+		Do()
+	if err != nil {
+		return fmt.Errorf("rename file: %w", err)
+	}
+	return nil
+}
+
 // TrashFile moves a file (or folder, with its contents) to the Drive trash.
 // The owner can restore it from drive.google.com for 30 days.
 func (c *Client) TrashFile(fileID string) error {
