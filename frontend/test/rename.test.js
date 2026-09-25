@@ -8,8 +8,10 @@ after(h.closeBrowser);
 
 async function renameViaMenu(page, title, newTitle) {
     await page.click('.tree-item:has-text("' + title + '")', { button: 'right' });
-    page.once('dialog', (d) => d.accept(newTitle));
     await page.click('#context-menu [data-action="rename"]');
+    const input = page.locator('.tree-rename-input');
+    await input.fill(newTitle);
+    await input.press('Enter');
     await page.waitForSelector('.tree-item:has-text("' + newTitle + '")');
 }
 

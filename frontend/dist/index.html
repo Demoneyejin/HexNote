@@ -338,6 +338,15 @@
         <button data-action="ws-new">New Workspace</button>
     </div>
 
+    <!-- In-app confirmation sheet (replaces window.confirm) -->
+    <div id="confirm-sheet" class="modal-overlay confirm-overlay hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+        <div class="modal-content confirm-content">
+            <h3 id="confirm-title"></h3>
+            <p id="confirm-body"></p>
+            <div id="confirm-actions" class="confirm-actions"></div>
+        </div>
+    </div>
+
     <!-- Toast notifications -->
     <div id="toast-container" class="toast-container"></div>
 

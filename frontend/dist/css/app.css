@@ -2032,3 +2032,61 @@ html, body {
     padding: 0;
     font-size: 13px;
 }
+
+/* ========================================
+   Confirmation sheet and inline rename
+   ======================================== */
+
+/* Above other modals, so a confirmation opened from one stays on top. */
+.confirm-overlay {
+    z-index: 600;
+}
+
+.confirm-content {
+    max-width: 440px;
+}
+
+#confirm-title {
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.35;
+    margin-bottom: 8px;
+}
+
+#confirm-body {
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+}
+
+#confirm-body:empty {
+    display: none;
+}
+
+.confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.tree-rename-input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--primary);
+    border-radius: 4px;
+    padding: 2px 6px;
+    outline: none;
+}
+
+.ws-rename-input {
+    font-size: 16px;
+    font-weight: 600;
+    padding: 4px 8px;
+    margin-bottom: 4px;
+}

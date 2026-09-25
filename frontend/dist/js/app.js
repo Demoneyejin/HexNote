@@ -52,6 +52,85 @@
         }, durationMs);
     }
 
+    // === Confirmation sheet ===
+    // askChoice shows an in-app sheet and resolves with the chosen value, or
+    // null when dismissed (Esc, Cancel, or a click on the backdrop).
+    //   opts.title, opts.body: text (never HTML)
+    //   opts.choices: [{ label, value, kind: 'danger'|'primary'|'secondary', id }]
+    //   opts.cancelLabel: label of the Cancel button (default 'Cancel')
+    // The Cancel button is focused first, so Enter never confirms a destructive
+    // action by accident.
+    var sheetResolve = null;
+
+    function askChoice(opts) {
+        var sheet = document.getElementById('confirm-sheet');
+        var actions = document.getElementById('confirm-actions');
+        if (sheetResolve) closeSheet(null);
+        document.getElementById('confirm-title').textContent = opts.title || '';
+        document.getElementById('confirm-body').textContent = opts.body || '';
+        actions.innerHTML = '';
+
+        var cancel = document.createElement('button');
+        cancel.id = 'confirm-cancel';
+        cancel.className = 'btn-secondary';
+        cancel.textContent = opts.cancelLabel || 'Cancel';
+        cancel.addEventListener('click', function () { closeSheet(null); });
+        actions.appendChild(cancel);
+
+        (opts.choices || []).forEach(function (c) {
+            var b = document.createElement('button');
+            if (c.id) b.id = c.id;
+            b.className = c.kind === 'danger' ? 'btn-danger' : (c.kind === 'secondary' ? 'btn-secondary' : 'btn-primary');
+            b.textContent = c.label;
+            b.dataset.value = c.value;
+            b.addEventListener('click', function () { closeSheet(c.value); });
+            actions.appendChild(b);
+        });
+
+        sheetReturnFocus = document.activeElement;
+        sheet.classList.remove('hidden');
+        cancel.focus();
+        return new Promise(function (resolve) { sheetResolve = resolve; });
+    }
+
+    var sheetReturnFocus = null;
+
+    function closeSheet(value) {
+        document.getElementById('confirm-sheet').classList.add('hidden');
+        var resolve = sheetResolve;
+        sheetResolve = null;
+        if (sheetReturnFocus && sheetReturnFocus.focus && document.body.contains(sheetReturnFocus)) {
+            try { sheetReturnFocus.focus(); } catch (e) { /* ignore */ }
+        }
+        sheetReturnFocus = null;
+        if (resolve) resolve(value);
+    }
+
+    // askConfirm is a yes/no sheet: resolves true only when confirmed.
+    async function askConfirm(title, body, confirmLabel, danger) {
+        var v = await askChoice({
+            title: title,
+            body: body,
+            choices: [{ id: 'confirm-ok', label: confirmLabel || 'OK', value: 'ok', kind: danger ? 'danger' : 'primary' }],
+        });
+        return v === 'ok';
+    }
+
+    function bindSheetEvents() {
+        var sheet = document.getElementById('confirm-sheet');
+        sheet.addEventListener('mousedown', function (e) {
+            if (e.target === sheet) closeSheet(null);
+        });
+        // Capture phase so Esc closes the sheet before anything else sees it.
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && sheetResolve) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                closeSheet(null);
+            }
+        }, true);
+    }
+
     // === Theme ===
     function applyTheme(theme) {
         if (theme === 'dark') {
@@ -360,6 +439,40 @@
         });
     }
 
+    // startWorkspaceRename edits a workspace card's name in place.
+    function startWorkspaceRename(wsId) {
+        var card = document.querySelector('.workspace-card[data-id="' + cssEscape(wsId) + '"]');
+        if (!card) return;
+        var h3 = card.querySelector('h3');
+        var oldName = card.dataset.name;
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'input-text ws-rename-input';
+        input.value = oldName;
+        input.setAttribute('aria-label', 'Workspace name');
+        h3.replaceWith(input);
+        input.focus();
+        input.select();
+
+        var done = false;
+        async function finish(commit) {
+            if (done) return;
+            done = true;
+            var name = input.value.trim();
+            if (commit && name && name !== oldName) {
+                try { await window.go.main.App.RenameWorkspace(wsId, name); } catch (e) { showToast('Rename failed: ' + (e.message || e), 'error'); }
+            }
+            showWorkspacesView(await window.go.main.App.GetWorkspaces());
+        }
+        input.addEventListener('keydown', function (e) {
+            e.stopPropagation();
+            if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+            else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        });
+        input.addEventListener('blur', function () { finish(true); });
+        input.addEventListener('click', function (e) { e.stopPropagation(); });
+    }
+
     var wsContextTargetId = null;
     var wsContextTargetName = null;
 
@@ -390,17 +503,17 @@
                 break;
             case 'ws-rename':
                 if (!wsContextTargetId) break;
-                var newName = prompt('Rename workspace:', wsContextTargetName);
-                if (newName && newName.trim()) {
-                    await window.go.main.App.RenameWorkspace(wsContextTargetId, newName.trim());
-                    var ws = await window.go.main.App.GetWorkspaces();
-                    showWorkspacesView(ws);
-                }
+                startWorkspaceRename(wsContextTargetId);
                 break;
             case 'ws-delete':
                 if (!wsContextTargetId) break;
-                if (confirm('Delete workspace "' + wsContextTargetName + '"? Local data will be removed. Google Drive folder is not affected.')) {
-                    await window.go.main.App.DeleteWorkspace(wsContextTargetId);
+                var delId = wsContextTargetId;
+                var ok = await askConfirm(
+                    'Remove "' + wsContextTargetName + '" from this PC?',
+                    'The Google Drive folder and its published pages stay on Drive, and you can add the workspace again later. Drafts that were never published are deleted.',
+                    'Remove from this PC', true);
+                if (ok) {
+                    await window.go.main.App.DeleteWorkspace(delId);
                     var ws2 = await window.go.main.App.GetWorkspaces();
                     showWorkspacesView(ws2);
                 }
@@ -865,6 +978,20 @@
         // Right-click on sidebar empty space → create at root level
         var pageTreeEl = document.getElementById('page-tree');
         if (pageTreeEl) {
+            // Double-click or F2 renames in place.
+            pageTreeEl.addEventListener('dblclick', function (e) {
+                var item = e.target.closest('.tree-item');
+                if (!item || e.target.closest('.tree-toggle')) return;
+                e.preventDefault();
+                startInlineRename(item.dataset.id);
+            });
+            pageTreeEl.addEventListener('keydown', function (e) {
+                if (e.key !== 'F2') return;
+                var item = e.target.closest('.tree-item') || pageTreeEl.querySelector('.tree-item.selected');
+                if (!item) return;
+                e.preventDefault();
+                startInlineRename(item.dataset.id);
+            });
             pageTreeEl.addEventListener('contextmenu', function (e) {
                 // Only fire if clicking the sidebar background, not a tree item
                 if (e.target.closest('.tree-item')) return;
@@ -1081,7 +1208,10 @@
 
         document.getElementById('btn-restore-version').addEventListener('click', async function () {
             if (!currentDocId || !selectedRevisionId) return;
-            if (!confirm('Restore this version? Your current content will be replaced.')) return;
+            var when = document.getElementById('history-preview-date').textContent;
+            if (!(await askConfirm('Restore this version?',
+                'The page text is replaced with the version from ' + when + '. The restored text is saved on this PC as unpublished changes until you publish it.',
+                'Restore'))) return;
             try {
                 var doc = await window.go.main.App.RestoreVersion(currentDocId, selectedRevisionId);
                 editor.commands.setContent(doc.content || '');
@@ -1172,6 +1302,7 @@
         var doc = node.document;
         var el = document.createElement('div');
         el.className = 'tree-item' + (doc.id === currentDocId ? ' selected' : '');
+        el.dataset.id = doc.id;
         el.style.paddingLeft = (12 + depth * 20) + 'px';
 
         var isExpanded = expandedFolders.has(doc.id);
@@ -1216,6 +1347,47 @@
             container.appendChild(childDiv);
         }
         return container;
+    }
+
+    // startInlineRename turns a tree item's label into a text field.
+    // Enter or leaving the field commits; Esc cancels.
+    function startInlineRename(id) {
+        var item = document.querySelector('#page-tree .tree-item[data-id="' + cssEscape(id) + '"]');
+        var doc = findDoc(id);
+        if (!item || !doc) return;
+        var label = item.querySelector('.tree-label');
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'tree-rename-input';
+        input.value = doc.title;
+        input.setAttribute('aria-label', 'New name');
+        label.replaceWith(input);
+        input.focus();
+        input.select();
+
+        var done = false;
+        function finish(commit) {
+            if (done) return;
+            done = true;
+            var title = input.value.trim();
+            if (commit && title && title !== doc.title) {
+                renameDocument(doc, title);
+            } else {
+                renderTree();
+            }
+        }
+        input.addEventListener('keydown', function (e) {
+            e.stopPropagation();
+            if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+            else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        });
+        input.addEventListener('blur', function () { finish(true); });
+        input.addEventListener('click', function (e) { e.stopPropagation(); });
+        input.addEventListener('dblclick', function (e) { e.stopPropagation(); });
+    }
+
+    function cssEscape(s) {
+        return window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&');
     }
 
     function toggleFolder(id) {
@@ -1285,34 +1457,59 @@
         return found;
     }
 
-    // deleteConfirmText names what deleting does on Drive, so nobody is
-    // surprised that teammates lose the page too.
-    function deleteConfirmText(doc) {
-        if (!doc) return 'Delete this page?';
+    // confirmDelete asks before deleting and names what happens on Drive, so
+    // nobody is surprised that teammates lose the page too.
+    function confirmDelete(doc) {
+        if (!doc) return askConfirm('Delete this page?', '', 'Delete', true);
         if (doc.isFolder) {
-            return doc.driveFileId
-                ? 'Delete the folder "' + doc.title + '" and everything in it, and move it to the Drive trash? Teammates will no longer see it.'
-                : 'Delete the folder "' + doc.title + '" and everything in it? Published pages inside move to the Drive trash.';
+            return askConfirm(
+                'Delete the folder "' + doc.title + '"?',
+                doc.driveFileId
+                    ? 'Everything in it is deleted from the workspace and the folder moves to the Drive trash. Teammates will no longer see it. The folder owner can restore it from Drive for 30 days.'
+                    : 'Everything in it is deleted. Published pages inside move to the Drive trash.',
+                'Delete folder', true);
         }
-        return doc.driveFileId
-            ? 'Delete "' + doc.title + '" from the workspace and move its Drive file to trash? Teammates will no longer see it.'
-            : 'Delete this draft? It only exists on this PC.';
+        if (doc.driveFileId) {
+            return askConfirm(
+                'Delete this page from the workspace and move its Drive file to trash?',
+                '"' + doc.title + '" disappears for teammates on their next refresh. The file owner can restore it from the Drive trash for 30 days.',
+                'Delete and trash', true);
+        }
+        return askConfirm('Delete this draft?', '"' + doc.title + '" only exists on this PC, so it cannot be recovered.', 'Delete draft', true);
     }
 
-    async function deleteCurrentDoc() {
-        if (!currentDocId) return;
-        if (!confirm(deleteConfirmText(findDoc(currentDocId)))) return;
+    // deleteDocument deletes a page or folder after confirmation.
+    async function deleteDocument(doc) {
+        if (!(await confirmDelete(doc))) return;
         try {
-            await window.go.main.App.DeleteDocument(currentDocId);
-            currentDocId = null;
-            document.getElementById('editor-container').classList.add('hidden');
+            await window.go.main.App.DeleteDocument(doc.id);
+            if (currentDocId === doc.id || (currentDocId && isDescendant(currentDocId, doc.id))) {
+                currentDocId = null;
+                window.__hexnoteHasUnsaved = false;
+                document.getElementById('editor-container').classList.add('hidden');
+            }
             await loadTree();
             updateEmptyState();
             showToast('Deleted', 'info');
         } catch (e) {
-            console.error('deleteCurrentDoc error:', e);
-            showToast('Error deleting document', 'error');
+            console.error('deleteDocument error:', e);
+            showToast('Error deleting: ' + (e.message || e), 'error');
         }
+    }
+
+    // isDescendant reports whether id sits somewhere below ancestorId.
+    function isDescendant(id, ancestorId) {
+        var d = findDoc(id);
+        while (d && d.parentId) {
+            if (d.parentId === ancestorId) return true;
+            d = findDoc(d.parentId);
+        }
+        return false;
+    }
+
+    async function deleteCurrentDoc() {
+        if (!currentDocId) return;
+        await deleteDocument(findDoc(currentDocId) || { id: currentDocId, title: '' });
     }
 
     function onEditorChange() {
@@ -1457,8 +1654,7 @@
             case 'new-folder': await createDocument(newParentId, true); break;
             case 'rename':
                 if (!contextTarget) break;
-                var newTitle = prompt('Rename:', contextTarget.title);
-                if (newTitle && newTitle.trim()) await renameDocument(contextTarget, newTitle.trim());
+                startInlineRename(contextTarget.id);
                 break;
             case 'publish':
                 if (!contextTarget) break;
@@ -1466,12 +1662,7 @@
                 break;
             case 'delete':
                 if (!contextTarget) break;
-                if (confirm(deleteConfirmText(contextTarget))) {
-                    await window.go.main.App.DeleteDocument(contextTarget.id);
-                    if (currentDocId === contextTarget.id) { currentDocId = null; document.getElementById('editor-container').classList.add('hidden'); }
-                    await loadTree();
-                    updateEmptyState();
-                }
+                await deleteDocument(contextTarget);
                 break;
         }
         contextTarget = null;
@@ -1479,6 +1670,7 @@
 
     // === Global Event Binding ===
     function bindGlobalEvents() {
+        bindSheetEvents();
         bindCredentialsEvents();
         bindSigninEvents();
         bindPathChoiceEvents();
