@@ -176,20 +176,20 @@
                         </button>
                     </div>
                     <div class="sidebar-actions">
-                        <button id="btn-sync" class="btn-icon" title="Refresh from Drive: get pages your teammates published">
+                        <button id="btn-sync" class="btn-icon" title="Refresh from Drive: get pages your teammates published" aria-label="Refresh from Drive">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8a6 6 0 0110.89-3.48M14 8a6 6 0 01-10.89 3.48" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M14 2v4h-4M2 14v-4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </button>
-                        <button id="btn-share" class="btn-icon" title="Share Workspace">
+                        <button id="btn-share" class="btn-icon" title="Share workspace" aria-label="Share workspace">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="4" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 7l4-2M6 9l4 2" stroke="currentColor" stroke-width="1.5"/></svg>
                         </button>
-                        <button id="btn-settings" class="btn-icon" title="Settings">
+                        <button id="btn-settings" class="btn-icon" title="Settings" aria-label="Settings">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.93 2.93l1.41 1.41M11.66 11.66l1.41 1.41M2.93 13.07l1.41-1.41M11.66 4.34l1.41-1.41" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                         </button>
                         <div class="sidebar-actions-sep"></div>
                         <button id="btn-new-page" class="btn-icon" title="New page (Ctrl+N)" aria-label="New page" aria-keyshortcuts="Control+N">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                         </button>
-                        <button id="btn-new-folder" class="btn-icon" title="New Folder">
+                        <button id="btn-new-folder" class="btn-icon" title="New folder" aria-label="New folder">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h4l2 2h6v7H2V4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="none"/><path d="M8 8v4M6 10h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                         </button>
                     </div>
@@ -200,7 +200,7 @@
                     <div id="search-results" class="search-results hidden"></div>
                 </div>
 
-                <div id="page-tree" class="page-tree"></div>
+                <div id="page-tree" class="page-tree" role="tree" aria-label="Pages"></div>
                 <div id="sync-status-bar" class="sync-status-bar">
                     <span id="sync-status-text">Ready</span>
                 </div>
@@ -223,14 +223,14 @@
                         <button id="btn-dismiss-draft-hint" class="btn-link draft-hint-dismiss">Got it</button>
                     </div>
                     <div class="editor-header">
-                        <input type="text" id="doc-title" class="doc-title" placeholder="Untitled">
+                        <input type="text" id="doc-title" class="doc-title" placeholder="Untitled" aria-label="Page title">
                         <div class="editor-meta">
                             <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
                             <button id="btn-publish" class="btn-primary btn-small" title="Publish to Drive" style="display:none;">Publish</button>
-                            <button id="btn-history" class="btn-icon" title="Version History">
+                            <button id="btn-history" class="btn-icon" title="Version history" aria-label="Version history">
                                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </button>
-                            <button id="btn-delete-doc" class="btn-icon btn-danger" title="Delete">
+                            <button id="btn-delete-doc" class="btn-icon btn-danger" title="Delete page" aria-label="Delete page">
                                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4h10M6 4V3h4v1M5 4v8.5a.5.5 0 00.5.5h5a.5.5 0 00.5-.5V4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </button>
                         </div>
@@ -242,15 +242,15 @@
     </div>
 
     <!-- === Sharing Modal === -->
-    <div id="sharing-modal" class="modal-overlay hidden">
+    <div id="sharing-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sharing-title">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Share Workspace</h3>
-                <button id="btn-close-sharing" class="btn-icon">&times;</button>
+                <h3 id="sharing-title">Share Workspace</h3>
+                <button id="btn-close-sharing" class="btn-icon" aria-label="Close">&times;</button>
             </div>
             <div class="share-form">
-                <input type="email" id="share-email" placeholder="Email address" class="input-text">
-                <select id="share-role" class="input-select">
+                <input type="email" id="share-email" placeholder="Email address" class="input-text" aria-label="Email address">
+                <select id="share-role" class="input-select" aria-label="Role">
                     <option value="reader">Viewer</option>
                     <option value="writer">Editor</option>
                 </select>
@@ -261,11 +261,11 @@
     </div>
 
     <!-- === Version History Modal === -->
-    <div id="history-modal" class="modal-overlay hidden">
+    <div id="history-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="history-title">
         <div class="modal-content modal-wide">
             <div class="modal-header">
-                <h3>Version History</h3>
-                <button id="btn-close-history" class="btn-icon">&times;</button>
+                <h3 id="history-title">Version History</h3>
+                <button id="btn-close-history" class="btn-icon" aria-label="Close">&times;</button>
             </div>
             <div class="history-layout">
                 <div id="history-list" class="history-list">
@@ -284,11 +284,11 @@
     </div>
 
     <!-- === Settings Modal === -->
-    <div id="settings-modal" class="modal-overlay hidden">
+    <div id="settings-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Settings</h3>
-                <button id="btn-close-settings" class="btn-icon">&times;</button>
+                <h3 id="settings-title">Settings</h3>
+                <button id="btn-close-settings" class="btn-icon" aria-label="Close">&times;</button>
             </div>
             <div class="settings-form">
                 <div class="settings-group">
@@ -332,25 +332,25 @@
     </div>
 
     <!-- Context menu -->
-    <div id="context-menu" class="context-menu hidden">
-        <button data-action="new-page">New Page</button>
-        <button data-action="new-folder">New Folder</button>
+    <div id="context-menu" class="context-menu hidden" role="menu" aria-label="Page actions">
+        <button role="menuitem" data-action="new-page">New Page</button>
+        <button role="menuitem" data-action="new-folder">New Folder</button>
         <hr>
-        <button data-action="rename">Rename</button>
-        <button data-action="move">Move to&hellip;</button>
-        <button data-action="publish">Publish</button>
-        <button data-action="delete" class="danger">Delete</button>
+        <button role="menuitem" data-action="rename">Rename <kbd>F2</kbd></button>
+        <button role="menuitem" data-action="move">Move to&hellip;</button>
+        <button role="menuitem" data-action="publish">Publish</button>
+        <button role="menuitem" data-action="delete" class="danger">Delete <kbd>Del</kbd></button>
     </div>
 
     <!-- Workspace context menu -->
-    <div id="ws-context-menu" class="context-menu hidden">
-        <button data-action="ws-open">Open</button>
-        <button data-action="ws-drive">Open in Google Drive</button>
-        <button data-action="ws-rename">Rename</button>
-        <button data-action="ws-permissions">Permissions</button>
+    <div id="ws-context-menu" class="context-menu hidden" role="menu" aria-label="Workspace actions">
+        <button role="menuitem" data-action="ws-open">Open</button>
+        <button role="menuitem" data-action="ws-drive">Open in Google Drive</button>
+        <button role="menuitem" data-action="ws-rename">Rename</button>
+        <button role="menuitem" data-action="ws-permissions">Permissions</button>
         <hr>
-        <button data-action="ws-delete" class="danger">Delete Workspace</button>
-        <button data-action="ws-new">New Workspace</button>
+        <button role="menuitem" data-action="ws-delete" class="danger">Remove from this PC</button>
+        <button role="menuitem" data-action="ws-new">New Workspace</button>
     </div>
 
     <!-- Move to... picker -->

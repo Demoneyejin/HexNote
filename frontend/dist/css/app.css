@@ -2366,3 +2366,49 @@ html, body {
 .toolbar-btn svg {
     display: block;
 }
+
+/* ========================================
+   Keyboard focus
+   ======================================== */
+
+/* A visible ring for keyboard focus only (mouse clicks show nothing). */
+:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.tree-item:focus-visible,
+.context-menu button:focus-visible,
+.history-item:focus-visible,
+.folder-item:focus-visible,
+.search-result-item:focus-visible {
+    outline-offset: -2px;
+}
+
+.context-menu button:focus-visible {
+    background: var(--sidebar-hover);
+}
+
+/* The title field and the page body show a caret, not a ring. */
+.doc-title:focus-visible,
+#editor .ProseMirror:focus-visible,
+.tree-rename-input:focus-visible {
+    outline: none;
+}
+
+.workspace-card:focus-visible {
+    outline-offset: 3px;
+}
+
+.workspace-card:focus-within .ws-menu-btn,
+.ws-menu-btn:focus-visible {
+    opacity: 1;
+}
+
+.context-menu kbd {
+    float: right;
+    margin-left: 16px;
+    font-family: var(--font);
+    font-size: 11px;
+    color: var(--text-muted);
+}

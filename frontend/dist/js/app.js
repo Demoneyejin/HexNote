@@ -648,6 +648,10 @@
         wsContextTargetId = wsId;
         wsContextTargetName = wsName;
         var menu = document.getElementById('ws-context-menu');
+        // A keyboard "click" on the ⋮ button has no pointer position.
+        var fromKeyboard = e.detail === 0 && e.currentTarget && e.currentTarget.getBoundingClientRect;
+        if (fromKeyboard) e = anchorEvent(e.currentTarget);
+        menuReturnFocus = fromKeyboard ? document.activeElement : null;
         menu.style.top = e.clientY + 'px';
         menu.style.left = e.clientX + 'px';
         menu.classList.remove('hidden');
@@ -661,11 +665,21 @@
         menu.querySelector('[data-action="ws-new"]').style.display = isCard ? 'none' : '';
         var sep = menu.querySelector('hr');
         if (sep) sep.style.display = isCard ? '' : 'none';
+        keepMenuOnScreen(menu);
+        if (fromKeyboard) focusMenu(menu);
+    }
+
+    // keepMenuOnScreen nudges a menu that would overflow the window.
+    function keepMenuOnScreen(menu) {
+        var r = menu.getBoundingClientRect();
+        if (r.right > window.innerWidth - 8) menu.style.left = Math.max(8, window.innerWidth - r.width - 8) + 'px';
+        if (r.bottom > window.innerHeight - 8) menu.style.top = Math.max(8, window.innerHeight - r.height - 8) + 'px';
     }
 
     async function onWsContextAction(e) {
-        var action = e.target.dataset.action;
+        var action = e.target.closest('button').dataset.action;
         document.getElementById('ws-context-menu').classList.add('hidden');
+        restoreMenuFocus();
         switch (action) {
             case 'ws-open':
                 if (wsContextTargetId) openWorkspace(wsContextTargetId);
@@ -1288,6 +1302,9 @@
                 e.preventDefault();
                 startInlineRename(item.dataset.id);
             });
+            pageTreeEl.addEventListener('keydown', onTreeKeydown);
+            bindMenuKeys(document.getElementById('context-menu'));
+            bindMenuKeys(document.getElementById('ws-context-menu'));
             pageTreeEl.addEventListener('keydown', function (e) {
                 if (e.key !== 'F2') return;
                 var item = e.target.closest('.tree-item') || pageTreeEl.querySelector('.tree-item.selected');
@@ -1376,6 +1393,7 @@
             .filter(function (m) { return m && !m.classList.contains('hidden'); });
         if (menus.length) {
             menus.forEach(function (m) { m.classList.add('hidden'); });
+            restoreMenuFocus();
             return true;
         }
         var results = document.getElementById('search-results');
@@ -1629,13 +1647,22 @@
                     (m.displayName ? '<br><span class="text-muted">' + escapeHtml(m.email) + '</span>' : '') +
                     '</div>' +
                     '<span class="member-role">' + m.role + '</span>' +
-                    (m.role !== 'owner' ? '<button class="btn-icon btn-danger member-remove" data-email="' + escapeHtml(m.email) + '">&times;</button>' : '') +
+                    (m.role !== 'owner' ? '<button class="btn-icon btn-danger member-remove" data-email="' + escapeHtml(m.email) + '" title="Remove access" aria-label="Remove ' + escapeHtml(m.email) + '">&times;</button>' : '') +
                     '</div>';
             }).join('');
 
             listEl.querySelectorAll('.member-remove').forEach(function (btn) {
                 btn.addEventListener('click', async function () {
-                    await window.go.main.App.RemoveWorkspaceMember(activeWorkspace.id, btn.dataset.email);
+                    var email = btn.dataset.email;
+                    var ok = await askConfirm('Remove ' + email + '?',
+                        'They lose access to this workspace\u2019s Google Drive folder and stop seeing its pages. You can invite them again later.',
+                        'Remove access', true);
+                    if (!ok) return;
+                    try {
+                        await window.go.main.App.RemoveWorkspaceMember(activeWorkspace.id, email);
+                    } catch (e) {
+                        showError('remove ' + email, e);
+                    }
                     loadMembers();
                 });
             });
@@ -1809,6 +1836,9 @@
 
     function renderTree() {
         var pageTree = document.getElementById('page-tree');
+        // Re-rendering replaces the items; keep keyboard focus where it was.
+        var active = document.activeElement;
+        var refocusId = active && active.classList && active.classList.contains('tree-item') ? active.dataset.id : null;
         pageTree.innerHTML = '';
         if (!tree || tree.length === 0) return;
         tree.forEach(function (node) {
@@ -1816,6 +1846,106 @@
             if (node.document.isFolder && node.document.title.toLowerCase() === 'assets') return;
             pageTree.appendChild(renderNode(node, 0));
         });
+        // One item is in the Tab order: the focused, selected or first one.
+        var target = (refocusId && treeItemEl(refocusId)) || pageTree.querySelector('.tree-item.selected') || pageTree.querySelector('.tree-item');
+        if (target) {
+            target.tabIndex = 0;
+            if (refocusId) target.focus();
+        }
+    }
+
+    function treeItemEl(id) {
+        return document.querySelector('#page-tree .tree-item[data-id="' + cssEscape(id) + '"]');
+    }
+
+    function focusTreeItem(el) {
+        if (!el) return;
+        document.querySelectorAll('#page-tree .tree-item').forEach(function (n) { n.tabIndex = -1; });
+        el.tabIndex = 0;
+        el.focus();
+    }
+
+    // onTreeKeydown implements the tree keyboard pattern: arrows move and
+    // expand/collapse, Enter/Space opens, Delete deletes, Shift+F10 or the
+    // Menu key opens the context menu. (F2 renames; see bindEditorEvents.)
+    function onTreeKeydown(e) {
+        var item = e.target.closest && e.target.closest('.tree-item');
+        if (!item || e.target.tagName === 'INPUT') return;
+        var doc = findDoc(item.dataset.id);
+        if (!doc) return;
+        var items = Array.prototype.slice.call(document.querySelectorAll('#page-tree .tree-item'));
+        var i = items.indexOf(item);
+        var expanded = expandedFolders.has(doc.id);
+
+        switch (e.key) {
+            case 'ArrowDown': focusTreeItem(items[Math.min(i + 1, items.length - 1)]); break;
+            case 'ArrowUp': focusTreeItem(items[Math.max(i - 1, 0)]); break;
+            case 'Home': focusTreeItem(items[0]); break;
+            case 'End': focusTreeItem(items[items.length - 1]); break;
+            case 'ArrowRight':
+                if (doc.isFolder && !expanded) toggleFolder(doc.id);
+                else if (doc.isFolder) focusTreeItem(items[i + 1] && isDescendant(items[i + 1].dataset.id, doc.id) ? items[i + 1] : item);
+                break;
+            case 'ArrowLeft':
+                if (doc.isFolder && expanded) toggleFolder(doc.id);
+                else if (doc.parentId) focusTreeItem(treeItemEl(doc.parentId));
+                break;
+            case 'Enter':
+            case ' ':
+                if (doc.isFolder) toggleFolder(doc.id); else selectDocument(doc.id);
+                break;
+            case 'Delete':
+                deleteDocument(doc);
+                break;
+            case 'ContextMenu':
+                showContextMenu(anchorEvent(item), doc, true);
+                break;
+            case 'F10':
+                if (!e.shiftKey) return;
+                showContextMenu(anchorEvent(item), doc, true);
+                break;
+            default:
+                return;
+        }
+        e.preventDefault();
+    }
+
+    // anchorEvent fakes a mouse position just below an element, for menus
+    // opened from the keyboard.
+    function anchorEvent(el) {
+        var r = el.getBoundingClientRect();
+        return { clientX: Math.round(r.left + 24), clientY: Math.round(r.bottom) };
+    }
+
+    // Keyboard support shared by the context menus: arrows move between
+    // visible items; focus returns to where the menu was opened from.
+    var menuReturnFocus = null;
+
+    function focusMenu(menu) {
+        var first = visibleMenuItems(menu)[0];
+        if (first) first.focus();
+    }
+
+    function visibleMenuItems(menu) {
+        return Array.prototype.slice.call(menu.querySelectorAll('button')).filter(function (b) { return b.style.display !== 'none'; });
+    }
+
+    function bindMenuKeys(menu) {
+        menu.addEventListener('keydown', function (e) {
+            var items = visibleMenuItems(menu);
+            var i = items.indexOf(document.activeElement);
+            if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+            else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+            else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+            else if (e.key === 'Tab') { e.preventDefault(); closeTopLayer(); }
+        });
+    }
+
+    function restoreMenuFocus() {
+        var el = menuReturnFocus;
+        menuReturnFocus = null;
+        if (el && document.body.contains(el)) el.focus();
     }
 
     function renderNode(node, depth) {
@@ -1823,6 +1953,10 @@
         var el = document.createElement('div');
         el.className = 'tree-item' + (doc.id === currentDocId ? ' selected' : '');
         el.dataset.id = doc.id;
+        el.setAttribute('role', 'treeitem');
+        el.setAttribute('aria-level', String(depth + 1));
+        el.setAttribute('aria-selected', doc.id === currentDocId ? 'true' : 'false');
+        el.tabIndex = -1;
         el.style.paddingLeft = (12 + depth * 20) + 'px';
 
         var isExpanded = expandedFolders.has(doc.id);
@@ -1861,9 +1995,11 @@
         container.className = 'tree-node';
         container.appendChild(el);
 
+        if (doc.isFolder) el.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
         if (doc.isFolder && isExpanded && node.children) {
             var childDiv = document.createElement('div');
             childDiv.className = 'tree-children';
+            childDiv.setAttribute('role', 'group');
             node.children.forEach(function (child) { childDiv.appendChild(renderNode(child, depth + 1)); });
             container.appendChild(childDiv);
         }
@@ -2315,9 +2451,10 @@
     }
 
     var contextTarget = null;
-    function showContextMenu(e, doc) {
+    function showContextMenu(e, doc, fromKeyboard) {
         contextTarget = doc;
         var menu = document.getElementById('context-menu');
+        menuReturnFocus = fromKeyboard ? document.activeElement : null;
         menu.style.top = e.clientY + 'px';
         menu.style.left = e.clientX + 'px';
         menu.classList.remove('hidden');
@@ -2336,14 +2473,17 @@
         var canPublish = !isRoot && doc.status === 'draft';
         publishItem.style.display = canPublish ? '' : 'none';
         publishItem.textContent = (isFolder && doc.driveFileId) ? 'Publish rename' : (doc && doc.driveFileId ? 'Publish changes' : 'Publish');
+        keepMenuOnScreen(menu);
+        if (fromKeyboard) focusMenu(menu);
         menu.querySelector('[data-action="delete"]').style.display = isRoot ? 'none' : '';
         // Hide the separator if only showing new-page/new-folder
         menu.querySelector('hr').style.display = isRoot ? 'none' : '';
     }
 
     async function onContextAction(e) {
-        var action = e.target.dataset.action;
+        var action = e.target.closest('button').dataset.action;
         document.getElementById('context-menu').classList.add('hidden');
+        restoreMenuFocus();
         // Determine where to create: inside a folder, as sibling of a file, or at root
         var newParentId = '';
         if (contextTarget) {
@@ -2373,8 +2513,52 @@
     }
 
     // === Global Event Binding ===
+    // Dialog focus: when a modal opens, focus moves into it (and Tab stays
+    // inside); when it closes, focus returns to where it was. Watching the
+    // class attribute covers every place that shows or hides a modal.
+    function bindModalFocus() {
+        var returnTo = {};
+        document.querySelectorAll('.modal-overlay').forEach(function (m) {
+            if (m.id === 'confirm-sheet') return; // manages its own focus
+            new MutationObserver(function () {
+                var open = !m.classList.contains('hidden');
+                if (open && !returnTo[m.id]) {
+                    returnTo[m.id] = document.activeElement || document.body;
+                    setTimeout(function () {
+                        if (m.contains(document.activeElement)) return; // the opener already focused something
+                        var f = focusables(m);
+                        var target = f.filter(function (el) { return !el.closest('.modal-header'); })[0] || f[0];
+                        if (target) target.focus();
+                    }, 0);
+                } else if (!open && returnTo[m.id]) {
+                    var el = returnTo[m.id];
+                    delete returnTo[m.id];
+                    if (el && document.body.contains(el) && el.focus) el.focus();
+                }
+            }).observe(m, { attributes: true, attributeFilter: ['class'] });
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Tab') return;
+            var open = Array.prototype.slice.call(document.querySelectorAll('.modal-overlay:not(.hidden)'));
+            var top = open.filter(function (m) { return m.id === 'confirm-sheet'; })[0] || open[open.length - 1];
+            if (!top) return;
+            var f = focusables(top);
+            if (!f.length) return;
+            var first = f[0], last = f[f.length - 1];
+            if (!top.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+            else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        });
+    }
+
+    function focusables(root) {
+        return Array.prototype.slice.call(root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+            .filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+    }
+
     function bindGlobalEvents() {
         bindSheetEvents();
+        bindModalFocus();
         bindCredentialsEvents();
         bindSigninEvents();
         bindPathChoiceEvents();
