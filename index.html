@@ -168,11 +168,12 @@
             <h2>Why HexNote asks for Google Drive access</h2>
             <p>HexNote is a desktop app with no server. When you sign in with Google, the app on your computer talks directly to your Google Drive so it can:</p>
             <ul>
-                <li>Create your workspace folder and the markdown pages and images inside it</li>
-                <li>Read and update those pages when you edit and publish</li>
+                <li>List your folders, and folders shared with you, so you can pick or join a workspace folder</li>
+                <li>Read and write the markdown pages and images inside that workspace folder, including pages your teammates published</li>
                 <li>Show and restore earlier versions of a page</li>
+                <li>Share a workspace folder with collaborators you choose</li>
             </ul>
-            <p>With HexNote's own "Sign in with Google" (Solo mode), the app asks only for Google's per-file permission (<code>drive.file</code>): it can see the files and folders HexNote itself created and nothing else in your Drive. Teams that work in folders shared with them can connect their own Google Cloud project instead (Team mode), which uses the broader Drive permission to find those folders and manage who a workspace is shared with.</p>
+            <p>Working in a folder a teammate shared is why HexNote asks for Google's full Drive permission: the narrower per-file permission cannot see pages someone else created. HexNote does not open or change files outside the workspace folders you choose.</p>
             <p>Your files and your sign-in token stay on your machine and in your own Drive. Nothing is sent to the developer. See the <a href="privacy.html">Privacy Policy</a> for the details.</p>
         </div>
 

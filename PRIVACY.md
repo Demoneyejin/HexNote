@@ -8,9 +8,9 @@ HexNote does not collect, store, or transmit any of your personal data to its au
 
 ## How HexNote signs in to Google
 
-HexNote uses a Google Cloud project that **you** create (the "bring your own key" setup). You paste that project's OAuth client file into HexNote, and you sign in on Google's own page in your browser. The sign-in is granted to your Cloud project, not to the HexNote authors, who never see your credentials or tokens.
+You sign in on Google's own page in your browser, with your normal Google account. HexNote uses its own Google sign-in ("Sign in with Google"); if you prefer, you can instead connect a Google Cloud project that **you** create (the "bring your own key" setup) by pasting its OAuth client file into HexNote. Either way, the sign-in token Google issues is stored only on your PC. The HexNote authors never see your password, credentials or tokens.
 
-## What Google Drive access HexNote asks for (Team mode)
+## What Google Drive access HexNote asks for
 
 HexNote requests the Google Drive scope `https://www.googleapis.com/auth/drive`. Google describes it as permission to *"see, edit, create, and delete all of your Google Drive files"*. That is broader than HexNote needs for any single action, and we want to be exact about how it is used. HexNote uses it only to:
 
@@ -23,17 +23,13 @@ HexNote requests the Google Drive scope `https://www.googleapis.com/auth/drive`.
 
 HexNote does not open, read or change the contents of files outside your workspace folders. Because it is open source, you can check this in the code (`internal/drive/client.go` holds every Drive call).
 
-## Solo mode (when your copy of HexNote offers it)
-
-Some builds of HexNote also offer **Solo mode**: "Sign in with Google" using HexNote's own Google-verified OAuth client, with no Cloud project to set up. In Solo mode HexNote requests only the scope `https://www.googleapis.com/auth/drive.file`, which Google describes as permission to *"see, edit, create, and delete only the specific Google Drive files you use with this app"*. HexNote can then see only the folders and files it created itself (your workspace folders and their pages and images). It cannot list, open or change anything else in your Drive, including folders others shared with you. Everything else in this policy applies to both modes: your token stays on your PC, and the HexNote authors receive nothing.
-
 ## What is stored on your PC
 
 In your application data folder (`%APPDATA%\HexNote` on Windows, `~/Library/Application Support/HexNote` on macOS):
 
 - `hexnote.db`: your pages (including drafts that were never published), the page tree, search index, settings and the member list of shared workspaces
 - `image_cache/`: images you added to pages
-- `oauth_credentials.json`: the OAuth client file you pasted (Team mode)
+- `oauth_credentials.json`: the OAuth client file you pasted, if you use your own Cloud project
 - `auth_mode` and `token_scope`: which sign-in mode and permission the saved token belongs to
 - `token.json`: your Google sign-in token. Signing out in HexNote deletes it.
 
@@ -62,7 +58,7 @@ Your Google Drive files are not affected by uninstalling HexNote.
 
 ## How Google user data is used and shared
 
-In both modes, the data HexNote reads from Google Drive is used only to provide the features you see in the app: showing, editing, publishing, restoring and sharing your pages. It stays on your PC and in your own Drive. HexNote does not transfer it to the HexNote authors or to any third party, does not use it for advertising, and does not use it to develop, improve or train AI or machine-learning models. The only sharing that happens is sharing you perform yourself, when you use Share to give someone access to a workspace folder.
+The data HexNote reads from Google Drive is used only to provide the features you see in the app: showing, editing, publishing, restoring and sharing your pages. It stays on your PC and in your own Drive. HexNote does not transfer it to the HexNote authors or to any third party, does not use it for advertising, and does not use it to develop, improve or train AI or machine-learning models. The only sharing that happens is sharing you perform yourself, when you use Share to give someone access to a workspace folder.
 
 HexNote's use and transfer of information received from Google APIs to any other app will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
 
