@@ -649,6 +649,9 @@
             },
         });
 
+        // Render ```mermaid code blocks as diagrams (see mermaid-block.js)
+        HexMermaid.attach(editor);
+
         // Build the toolbar for TipTap (it doesn't include one by default)
         buildEditorToolbar();
     }
@@ -724,6 +727,7 @@
             ],
             [
                 { label: '{}', title: 'Code Block', cmd: function () { editor.chain().focus().toggleCodeBlock().run(); }, active: function () { return editor.isActive('codeBlock'); } },
+                { label: '⎇', title: 'Mermaid Diagram', cmd: function () { HexMermaid.insert(editor); }, active: function () { return HexMermaid.isActive(editor); } },
             ],
         ];
 

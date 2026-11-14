@@ -15,6 +15,7 @@ HexNote is a **free desktop wiki/knowledge base** that replaces Confluence, Noti
 ### Features
 
 - **Rich text editor** — headings, bold, italic, code blocks, tables, task lists, images
+- **Mermaid diagrams** — flowcharts, sequence diagrams and more from a ` ```mermaid ` code block, rendered live
 - **Google Drive storage** — your docs are `.md` files on YOUR Drive, not someone else's server
 - **Publish/Draft workflow** — edit locally, publish when ready
 - **Workspace sharing** — share a Drive folder, everyone sees published pages
