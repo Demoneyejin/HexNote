@@ -13,7 +13,7 @@
             <h1 class="setup-title">HexNote</h1>
             <h2 id="credentials-heading">Welcome! One-time Setup</h2>
             <p id="credentials-intro" class="setup-desc">HexNote stores your docs on <strong>your own Google Drive</strong>. To get started, you'll need free Google Cloud credentials. This takes about 10 to 15 minutes and only needs to be done once.</p>
-            <p id="credentials-team-intro" class="setup-desc hidden"><strong>Team mode</strong> lets everyone in your studio open the same shared Drive folders. One person creates a Google Cloud project (about 10 to 15 minutes, free) and shares its credentials file with the team. HexNote then asks for full Google Drive access, which shared folders need.</p>
+            <p id="credentials-own-intro" class="setup-desc hidden">Most people don't need this. If you would rather not use HexNote's own Google sign-in, you can sign in through a Google Cloud project you control instead (about 10 to 15 minutes, free). Teammates can share one credentials file. HexNote asks for the same Google Drive access either way.</p>
             <details class="setup-guide">
                 <summary class="setup-guide-toggle">Show me how (step-by-step setup guide)</summary>
                 <ol class="setup-steps">
@@ -32,7 +32,7 @@
             <button id="btn-save-credentials" class="btn-primary">Save &amp; Continue</button>
             <p id="credentials-error" class="error-text hidden"></p>
             <button id="btn-credentials-back" class="btn-link btn-muted hidden">Back</button>
-            <button id="btn-use-bundled-from-creds" class="btn-link btn-muted hidden">Use HexNote's sign-in instead (Solo mode)</button>
+            <button id="btn-use-bundled-from-creds" class="btn-link btn-muted hidden">Use HexNote's sign-in instead</button>
         </div>
     </div>
 
@@ -47,7 +47,7 @@
             <p id="signin-waiting" class="status-text hidden">Waiting for authentication... Check your browser.</p>
             <p id="signin-error" class="error-text hidden"></p>
             <button id="btn-custom-credentials" class="btn-link btn-muted">Change API credentials</button>
-            <button id="btn-use-bundled" class="btn-link btn-muted hidden">Use HexNote's sign-in instead (Solo mode)</button>
+            <button id="btn-use-bundled" class="btn-link btn-muted hidden">Use HexNote's sign-in instead</button>
         </div>
     </div>
 
@@ -165,17 +165,6 @@
         </div>
     </div>
 
-    <!-- === Solo mode: name a new workspace (HexNote creates its Drive folder) === -->
-    <div id="view-solo-create" class="view hidden">
-        <div class="setup-card">
-            <h1 class="setup-title">HexNote</h1>
-            <h2>Name your workspace</h2>
-            <p class="setup-desc">HexNote creates a folder with this name in your Google Drive and keeps the workspace's published pages there.</p>
-            <input type="text" id="solo-workspace-name" class="input-text" placeholder="For example: Studio Wiki" aria-label="Workspace name" maxlength="120">
-            <button id="btn-solo-create" class="btn-primary">Create workspace</button>
-            <p id="solo-create-error" class="error-text hidden"></p>
-            <button id="btn-solo-back" class="btn-link btn-muted">Back</button>
-        </div>
     </div>
 
     <!-- === Editor View (Phase 1 UI, now with workspace header) === -->
@@ -264,7 +253,6 @@
                 <h3 id="sharing-title">Share Workspace</h3>
                 <button id="btn-close-sharing" class="btn-icon" aria-label="Close">&times;</button>
             </div>
-            <p id="share-solo-note" class="settings-hint share-solo-note hidden">People you invite can open the pages in Google Drive. To edit them in HexNote, they need Team mode (a Google Cloud project for your team); in Solo mode HexNote only sees files it created.</p>
             <div class="share-form">
                 <input type="email" id="share-email" placeholder="Email address" class="input-text" aria-label="Email address">
                 <select id="share-role" class="input-select" aria-label="Role">

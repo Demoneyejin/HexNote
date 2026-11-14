@@ -23,7 +23,7 @@
         override: {},
         listeners: {},
         opened: [],
-        auth: Object.assign({ hasCredentials: true, isSignedIn: true, userEmail: 'alex@example.com', mode: 'team', bundledAvailable: false }, seed.auth || {}),
+        auth: Object.assign({ hasCredentials: true, isSignedIn: true, userEmail: 'alex@example.com', mode: 'own-key', bundledAvailable: false }, seed.auth || {}),
         settings: Object.assign({ syncIntervalSecs: 120, theme: 'light', autoSaveDelaySecs: 1 }, seed.settings || {}),
         workspaces: clone(seed.workspaces) || [
             { id: 'ws-1', name: 'Studio Wiki', driveFolderId: 'drive-root-1', driveFolderUrl: 'https://drive.google.com/drive/folders/drive-root-1', lastSyncedAt: null, isActive: false, access: 'owner' },
@@ -96,14 +96,14 @@
         },
         GetAuthStatus: function () { return clone(S.auth); },
         ImportCredentials: function () {
-            var wasSolo = S.auth.mode === 'solo';
-            S.auth.hasCredentials = true; S.auth.mode = 'team';
-            if (wasSolo) S.auth.isSignedIn = false; // different client: sign in again
+            var wasBuiltIn = S.auth.mode === 'builtin';
+            S.auth.hasCredentials = true; S.auth.mode = 'own-key';
+            if (wasBuiltIn) S.auth.isSignedIn = false; // different client: sign in again
             return null;
         },
         UseBundledCredentials: function () {
             if (!S.auth.bundledAvailable) throw 'ERR_INVALID: This build of HexNote has no built-in sign-in.';
-            S.auth.hasCredentials = true; S.auth.mode = 'solo'; S.auth.isSignedIn = false; return null;
+            S.auth.hasCredentials = true; S.auth.mode = 'builtin'; S.auth.isSignedIn = false; return null;
         },
         StartOAuthFlow: function () { return null; },
         OnAuthComplete: function () { S.auth.isSignedIn = true; return clone(S.auth); },
@@ -118,7 +118,6 @@
             S.workspaces.push(ws);
             return impl.SwitchWorkspace(ws.id);
         },
-        CreateSoloWorkspace: function (name) { return impl.CreateWorkspace(name, 'auto-' + newId()); },
         SwitchWorkspace: function (id) {
             S.workspaces.forEach(function (w) { w.isActive = w.id === id; });
             return clone(activeWs());

@@ -14,10 +14,6 @@ export function CreateLabel(arg1, arg2) {
   return window['go']['main']['App']['CreateLabel'](arg1, arg2);
 }
 
-export function CreateSoloWorkspace(arg1) {
-  return window['go']['main']['App']['CreateSoloWorkspace'](arg1);
-}
-
 export function CreateWorkspace(arg1, arg2) {
   return window['go']['main']['App']['CreateWorkspace'](arg1, arg2);
 }

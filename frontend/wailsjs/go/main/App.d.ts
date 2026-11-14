@@ -8,8 +8,6 @@ export function CreateDriveFolder(arg1:string,arg2:string):Promise<models.DriveF
 
 export function CreateLabel(arg1:string,arg2:string):Promise<models.Label>;
 
-export function CreateSoloWorkspace(arg1:string):Promise<models.Workspace>;
-
 export function CreateWorkspace(arg1:string,arg2:string):Promise<models.Workspace>;
 
 export function DeleteDocument(arg1:string):Promise<void>;

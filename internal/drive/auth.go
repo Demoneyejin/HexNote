@@ -25,36 +25,40 @@ import (
 //
 //	-X hexnote/internal/drive.bundledClientID=... -X hexnote/internal/drive.bundledClientSecret=...
 //
-// Never commit real values. When they are empty (a plain `wails build`), only
-// the bring-your-own-key Team mode exists, exactly as before.
+// Never commit real values. When they are empty (a plain `wails build`), the
+// app has no sign-in of its own and every user pastes an OAuth client JSON.
 var (
 	bundledClientID     string
 	bundledClientSecret string
 )
 
-// Sign-in modes.
+// Sign-in modes: which OAuth client the user signs in through. Both request
+// the full drive scope. Shared workspaces need it: drive.file cannot see
+// pages a teammate created, even inside a folder shared with the user.
 const (
-	// ModeSolo signs in with the bundled, Google-verified HexNote client and
-	// the drive.file scope: HexNote only sees files it created (or the user
-	// opened with it). No Cloud project needed; no shared folders.
-	ModeSolo = "solo"
-	// ModeTeam signs in with the user's own OAuth client (pasted JSON) and
-	// the full drive scope, which shared workspaces need.
-	ModeTeam = "team"
+	// ModeBuiltIn signs in with the bundled HexNote client: the ordinary
+	// "Sign in with Google", no Cloud project needed.
+	ModeBuiltIn = "builtin"
+	// ModeOwnKey signs in with an OAuth client the user pasted (their own
+	// Google Cloud project).
+	ModeOwnKey = "own-key"
 )
 
-// scopeKeys are written to token_scope with each token, so a token obtained
-// for one mode is discarded when the app runs in another.
+// scopeKeys are written to token_scope with each token. A token belongs to
+// the client that issued it, so a token saved in one mode is discarded when
+// the app runs in the other. The key also changes when a mode's scope does:
+// tokens the bundled client issued for drive.file (key "drive.file", before
+// it asked for full Drive access) are discarded the same way.
 var scopeKeys = map[string]string{
-	ModeTeam: "drive", // unchanged from before modes existed: existing tokens stay valid
-	ModeSolo: "drive.file",
+	ModeOwnKey:  "drive", // unchanged from before modes existed: existing tokens stay valid
+	ModeBuiltIn: "drive:builtin",
 }
 
 // AuthManager handles OAuth2 authentication with Google
 type AuthManager struct {
 	appDataDir string
 	config     *oauth2.Config
-	mode       string // ModeSolo, ModeTeam, or "" when no credentials are available
+	mode       string // ModeBuiltIn, ModeOwnKey, or "" when no credentials are available
 	token      *oauth2.Token
 	wailsCtx   context.Context
 }
@@ -77,20 +81,18 @@ func (am *AuthManager) SetWailsContext(ctx context.Context) {
 }
 
 // BundledClientAvailable reports whether this build carries a HexNote OAuth
-// client (Solo mode is possible).
+// client, so users can sign in without a Cloud project of their own.
 func BundledClientAvailable() bool {
 	return bundledClientID != ""
 }
 
 // LoadCredentials picks the OAuth client and mode:
-//   - Team mode when the user pasted their own client (oauth_credentials.json),
-//     with the full drive scope;
-//   - otherwise Solo mode with the bundled client, if this build has one,
-//     with the drive.file scope;
+//   - the user's own client when they pasted one (oauth_credentials.json);
+//   - otherwise the bundled HexNote client, if this build has one;
 //   - otherwise no credentials (the user must paste a client JSON).
 //
 // The mode is recorded in auth_mode, and a saved token is only used if it
-// was obtained for the same mode's scope.
+// was obtained in the same mode.
 func (am *AuthManager) LoadCredentials() error {
 	am.config = nil
 	am.mode = ""
@@ -105,7 +107,7 @@ func (am *AuthManager) LoadCredentials() error {
 				Scopes:       []string{drive.DriveScope},
 				Endpoint:     google.Endpoint,
 			}
-			am.setMode(ModeTeam)
+			am.setMode(ModeOwnKey)
 			am.loadToken()
 			return nil
 		}
@@ -115,10 +117,10 @@ func (am *AuthManager) LoadCredentials() error {
 		am.config = &oauth2.Config{
 			ClientID:     bundledClientID,
 			ClientSecret: bundledClientSecret,
-			Scopes:       []string{drive.DriveFileScope},
+			Scopes:       []string{drive.DriveScope},
 			Endpoint:     google.Endpoint,
 		}
-		am.setMode(ModeSolo)
+		am.setMode(ModeBuiltIn)
 		am.loadToken()
 		return nil
 	}
@@ -126,7 +128,7 @@ func (am *AuthManager) LoadCredentials() error {
 	return fmt.Errorf("no credentials available")
 }
 
-// Mode returns the current sign-in mode (ModeSolo, ModeTeam or "").
+// Mode returns the current sign-in mode (ModeBuiltIn, ModeOwnKey or "").
 func (am *AuthManager) Mode() string {
 	return am.mode
 }
@@ -137,9 +139,9 @@ func (am *AuthManager) setMode(mode string) {
 	os.WriteFile(am.modePath(), []byte(mode), 0600)
 }
 
-// ClearCredentials forgets the pasted Team-mode client (and its sign-in).
-// With a bundled client the app falls back to Solo mode; without one the
-// user is asked for credentials again.
+// ClearCredentials forgets the pasted client (and its sign-in). With a
+// bundled client the app falls back to HexNote's own sign-in; without one
+// the user is asked for credentials again.
 func (am *AuthManager) ClearCredentials() error {
 	am.SignOut()
 	safeRemoveInDir(am.appDataDir, am.credentialsPath())
@@ -332,13 +334,13 @@ func safeRemoveInDir(root, path string) {
 // Token persistence
 
 // currentScopeKey is written alongside the token so we can detect scope
-// changes (an app update, or switching between Solo and Team mode) and
-// invalidate tokens obtained for another scope.
+// changes (an app update, or switching between the built-in and the user's
+// own client) and invalidate tokens obtained for another scope or client.
 func (am *AuthManager) currentScopeKey() string {
 	if key, ok := scopeKeys[am.mode]; ok {
 		return key
 	}
-	return scopeKeys[ModeTeam]
+	return scopeKeys[ModeOwnKey]
 }
 
 func (am *AuthManager) loadToken() {

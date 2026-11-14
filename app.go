@@ -234,25 +234,16 @@ func (a *App) ImportCredentials(jsonContent string) error {
 	return nil
 }
 
-// UseBundledCredentials switches to Solo mode: the pasted Team-mode client
-// is forgotten and the next sign-in uses HexNote's own client with the
-// drive.file scope. Workspaces set up in Team mode stay on this PC, but
-// Solo mode cannot see their Drive folders unless HexNote created them.
+// UseBundledCredentials switches to HexNote's own sign-in: the pasted client
+// is forgotten and the user signs in again through the bundled client.
+// Workspaces stay as they are; both clients ask for the same Drive access.
 func (a *App) UseBundledCredentials() error {
 	if !drive.BundledClientAvailable() {
-		return fmt.Errorf("ERR_INVALID: This build of HexNote has no built-in sign-in. Use your team's Google Cloud credentials.")
+		return fmt.Errorf("ERR_INVALID: This build of HexNote has no built-in sign-in. Use your own Google Cloud credentials.")
 	}
 	a.setDrive(nil)
 	return a.authMgr.ClearCredentials()
 }
-
-// soloMode reports whether the app runs with the drive.file scope, where
-// HexNote only sees Drive files and folders it created itself.
-func (a *App) soloMode() bool {
-	return a.authMgr != nil && a.authMgr.Mode() == drive.ModeSolo
-}
-
-var errNeedsTeamMode = errors.New("ERR_INVALID: Opening folders that HexNote did not create needs Team mode (your own Google Cloud credentials). In Solo mode, create a new workspace instead.")
 
 func (a *App) StartOAuthFlow() error {
 	// The auth flow completes asynchronously — frontend listens for auth:complete event
@@ -303,25 +294,6 @@ func (a *App) GetActiveWorkspace() (*models.Workspace, error) {
 	return a.db.GetActiveWorkspace()
 }
 
-// CreateSoloWorkspace creates a workspace backed by a new folder in the
-// user's My Drive. Solo mode (drive.file) cannot list existing folders, so
-// HexNote creates the folder itself; it works in Team mode too.
-func (a *App) CreateSoloWorkspace(name string) (*models.Workspace, error) {
-	client := a.client()
-	if client == nil {
-		return nil, errNotSignedIn
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, fmt.Errorf("ERR_INVALID: Give the workspace a name.")
-	}
-	folder, err := client.CreateFolder(name, "root")
-	if err != nil {
-		return nil, a.driveErr("create the workspace folder", err)
-	}
-	return a.CreateWorkspace(name, folder.ID)
-}
-
 func (a *App) CreateWorkspace(name string, driveFolderID string) (*models.Workspace, error) {
 	ws, err := a.db.CreateWorkspace(name, driveFolderID)
 	if err != nil {
@@ -368,9 +340,6 @@ func (a *App) SearchSharedFolders(query string) ([]models.DriveFolder, error) {
 	if client == nil {
 		return nil, errNotSignedIn
 	}
-	if a.soloMode() {
-		return nil, errNeedsTeamMode
-	}
 	folders, err := client.SearchSharedFolders(query)
 	return folders, a.driveErr("search shared folders", err)
 }
@@ -380,9 +349,6 @@ func (a *App) ResolveFolderLink(link string) (*models.DriveFolder, error) {
 	client := a.client()
 	if client == nil {
 		return nil, errNotSignedIn
-	}
-	if a.soloMode() {
-		return nil, errNeedsTeamMode
 	}
 	folderID := parseDriveFolderID(link)
 	if folderID == "" {

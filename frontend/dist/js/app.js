@@ -26,7 +26,7 @@
     var refreshInFlight = null;  // promise of the running refresh, if any
 
     // === View Management ===
-    var ALL_VIEWS = ['view-credentials', 'view-signin', 'view-path-choice', 'view-workspaces', 'view-onboarding', 'view-join', 'view-solo-create', 'view-editor'];
+    var ALL_VIEWS = ['view-credentials', 'view-signin', 'view-path-choice', 'view-workspaces', 'view-onboarding', 'view-join', 'view-editor'];
 
     function showView(viewId) {
         ALL_VIEWS.forEach(function (id) {
@@ -406,7 +406,7 @@
         });
 
         document.getElementById('btn-credentials-back').addEventListener('click', routeToCorrectView);
-        document.getElementById('btn-use-bundled-from-creds').addEventListener('click', switchToSolo);
+        document.getElementById('btn-use-bundled-from-creds').addEventListener('click', switchToBuiltIn);
 
         document.getElementById('link-gcp').addEventListener('click', function (e) {
             e.preventDefault();
@@ -423,45 +423,44 @@
         var bundled = !!(authStatus && authStatus.bundledAvailable);
         document.getElementById('credentials-error').classList.add('hidden');
         document.getElementById('btn-credentials-back').classList.toggle('hidden', !canGoBack);
-        // With a built-in sign-in available, this screen is the Team mode path.
-        document.getElementById('credentials-heading').textContent = bundled ? 'Use your team\u2019s credentials' : 'Welcome! One-time Setup';
+        // With a built-in sign-in available, this screen is the optional
+        // bring-your-own-credentials path.
+        document.getElementById('credentials-heading').textContent = bundled ? 'Use your own Google Cloud credentials' : 'Welcome! One-time Setup';
         document.getElementById('credentials-intro').classList.toggle('hidden', bundled);
-        document.getElementById('credentials-team-intro').classList.toggle('hidden', !bundled);
-        document.getElementById('btn-use-bundled-from-creds').classList.toggle('hidden', !bundled || (authStatus && authStatus.mode === 'solo'));
+        document.getElementById('credentials-own-intro').classList.toggle('hidden', !bundled);
+        document.getElementById('btn-use-bundled-from-creds').classList.toggle('hidden', !bundled || usesBuiltInSignIn());
         showView('view-credentials');
     }
 
-    function isSolo() {
-        return !!(authStatus && authStatus.mode === 'solo');
+    // usesBuiltInSignIn: signed in (or about to) through HexNote's own Google
+    // client rather than credentials the user pasted. Both get the same
+    // Drive access; only the wording and the switch links differ.
+    function usesBuiltInSignIn() {
+        return !!(authStatus && authStatus.mode === 'builtin');
     }
 
-    // applyModeCopy adjusts screens that differ between Solo and Team mode.
+    // applyModeCopy adjusts the wording that depends on which sign-in is used.
     function applyModeCopy() {
-        var solo = isSolo();
+        var builtIn = usesBuiltInSignIn();
         var bundled = !!(authStatus && authStatus.bundledAvailable);
-        document.getElementById('signin-heading').textContent = solo ? 'Sign in with Google' : 'Sign in to Google';
-        document.getElementById('signin-desc').textContent = solo
-            ? 'HexNote keeps your pages in a folder it creates in your Google Drive. It can only see files it created, nothing else in your Drive. A browser window will open.'
+        document.getElementById('signin-heading').textContent = builtIn ? 'Sign in with Google' : 'Sign in to Google';
+        document.getElementById('signin-desc').textContent = builtIn
+            ? 'HexNote keeps your pages in a Google Drive folder you choose, so your team can work in it together. A browser window will open for you to sign in.'
             : 'Click below to authenticate with your Google account. A browser window will open.';
-        document.getElementById('btn-custom-credentials').textContent = solo ? 'Use your team\u2019s credentials instead' : 'Change Google Cloud credentials';
-        document.getElementById('btn-use-bundled').classList.toggle('hidden', solo || !bundled);
-        document.getElementById('path-join-desc').textContent = solo
-            ? 'Needs Team mode: shared folders are not visible with HexNote\u2019s own sign-in'
-            : 'Open a workspace someone shared with you';
-        document.getElementById('btn-path-join').classList.toggle('path-card-muted', solo);
-        document.getElementById('share-solo-note').classList.toggle('hidden', !solo);
-        document.getElementById('settings-account-mode').textContent = solo
-            ? 'Solo mode: signed in with HexNote\u2019s own Google sign-in. HexNote can only see Drive files it created.'
-            : (authStatus && authStatus.mode === 'team' ? 'Team mode: signed in through your own Google Cloud project, with full Google Drive access for shared folders.' : '');
-        document.getElementById('btn-settings-credentials').textContent = solo ? 'Switch to Team mode' : 'Change Google Cloud credentials';
+        document.getElementById('btn-custom-credentials').textContent = builtIn ? 'Use your own Google Cloud credentials instead' : 'Change Google Cloud credentials';
+        document.getElementById('btn-use-bundled').classList.toggle('hidden', builtIn || !bundled);
+        document.getElementById('settings-account-mode').textContent = builtIn
+            ? 'Signed in with HexNote\u2019s Google sign-in.'
+            : (authStatus && authStatus.mode === 'own-key' ? 'Signed in through your own Google Cloud project.' : '');
+        document.getElementById('btn-settings-credentials').textContent = builtIn ? 'Use your own Google Cloud credentials' : 'Change Google Cloud credentials';
     }
 
-    async function switchToSolo() {
+    async function switchToBuiltIn() {
         try {
             await window.go.main.App.UseBundledCredentials();
             await routeToCorrectView();
         } catch (e) {
-            showError('switch to Solo mode', e);
+            showError('switch to HexNote\u2019s sign-in', e);
         }
     }
 
@@ -503,11 +502,11 @@
             }
         });
 
-        // Team mode: use your own Google Cloud OAuth client
+        // Optional: use your own Google Cloud OAuth client
         document.getElementById('btn-custom-credentials').addEventListener('click', function () {
             showCredentialsView(true);
         });
-        document.getElementById('btn-use-bundled').addEventListener('click', switchToSolo);
+        document.getElementById('btn-use-bundled').addEventListener('click', switchToBuiltIn);
 
         // Listen for auth completion from Wails event
         if (window.runtime) {
@@ -825,57 +824,17 @@
     // === Path Choice (Create vs Join) ===
     function bindPathChoiceEvents() {
         document.getElementById('btn-path-create').addEventListener('click', function () {
-            if (isSolo()) { showSoloCreate(); return; }
             currentFolderPath = [{ id: 'root', name: 'My Drive' }];
             showView('view-onboarding');
             loadFolders('root');
         });
 
         document.getElementById('btn-path-join').addEventListener('click', async function () {
-            if (isSolo()) {
-                var go = await askConfirm('Joining a shared workspace needs Team mode',
-                    'With HexNote\u2019s own sign-in, HexNote can only see Drive files it created, so folders others share with you stay invisible. Team mode uses a Google Cloud project your team sets up once (the person who shared the folder may already have one).',
-                    'Set up Team mode');
-                if (go) showCredentialsView(true);
-                return;
-            }
             showView('view-join');
             loadSharedFolders('');
         });
 
         document.getElementById('btn-signout-pathchoice').addEventListener('click', doSignOut);
-    }
-
-    // === Solo mode: create a workspace by name ===
-    function showSoloCreate() {
-        document.getElementById('solo-create-error').classList.add('hidden');
-        document.getElementById('solo-workspace-name').value = '';
-        showView('view-solo-create');
-        setTimeout(function () { document.getElementById('solo-workspace-name').focus(); }, 0);
-    }
-
-    function bindSoloCreateEvents() {
-        var input = document.getElementById('solo-workspace-name');
-        var errEl = document.getElementById('solo-create-error');
-        async function create() {
-            var name = input.value.trim();
-            if (!name) { errEl.textContent = 'Give the workspace a name.'; errEl.classList.remove('hidden'); input.focus(); return; }
-            var btn = document.getElementById('btn-solo-create');
-            btn.disabled = true;
-            try {
-                var ws = await window.go.main.App.CreateSoloWorkspace(name);
-                showToast('Workspace created', 'success');
-                await openWorkspace(ws.id);
-            } catch (e) {
-                errEl.textContent = describeError(e, 'create the workspace').text;
-                errEl.classList.remove('hidden');
-            } finally {
-                btn.disabled = false;
-            }
-        }
-        document.getElementById('btn-solo-create').addEventListener('click', create);
-        input.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); create(); } });
-        document.getElementById('btn-solo-back').addEventListener('click', routeToCorrectView);
     }
 
     // === Onboarding (Create Workspace) ===
@@ -1886,7 +1845,7 @@
         document.getElementById('btn-settings-signout').addEventListener('click', doSignOut);
         document.getElementById('btn-settings-credentials').addEventListener('click', async function () {
             await leaveEditor();
-            showCredentialsView(true); // Team mode setup (or changing the Team credentials)
+            showCredentialsView(true); // set up or change the user's own credentials
         });
 
         document.getElementById('btn-save-settings').addEventListener('click', async function () {
@@ -2676,7 +2635,6 @@
         bindPathChoiceEvents();
         bindWorkspacesEvents();
         bindOnboardingEvents();
-        bindSoloCreateEvents();
         bindJoinEvents();
         bindEditorEvents();
         bindSharingEvents();

@@ -114,34 +114,6 @@
             justify-content: center;
             margin-bottom: 12px;
         }
-        .screenshot {
-            display: block;
-            width: 100%;
-            height: auto;
-            border: 1px solid #e5e7eb;
-            border-radius: 10px;
-            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08);
-            margin-bottom: 8px;
-        }
-        .caption {
-            font-size: 14px;
-            color: #6b7280;
-            text-align: center;
-            margin-bottom: 32px;
-        }
-        ol.steps {
-            padding-left: 22px;
-        }
-        ol.steps li {
-            margin-bottom: 10px;
-        }
-        .note {
-            font-size: 15px;
-            background: #f9fafb;
-            border-left: 3px solid #2563eb;
-            padding: 10px 14px;
-            border-radius: 4px;
-        }
         code {
             background: #f3f4f6;
             padding: 2px 6px;
@@ -168,17 +140,13 @@
             </div>
         </div>
 
-        <img class="screenshot" src="assets/screenshot-editor.png" width="1280" height="800"
-             alt="The HexNote editor: a page tree with folders on the left, and a page with a table and a task list on the right. The status line reads 'Published · edits not published' next to a Publish Changes button.">
-        <p class="caption">Pages live in a tree of folders. The status line says whether teammates can see your latest text.</p>
-
         <div class="card">
             <h2>Features</h2>
             <ul>
                 <li><strong>Rich text editor</strong> — headings, bold, italic, code blocks, tables, task lists, images</li>
                 <li><strong>Google Drive storage</strong> — your docs are <code>.md</code> files on YOUR Drive</li>
-                <li><strong>Publish/Draft workflow</strong> — edit on your PC, publish when ready; HexNote warns you before overwriting a teammate's newer version</li>
-                <li><strong>Workspace sharing</strong> — share a Drive folder; teammates' published pages arrive automatically</li>
+                <li><strong>Publish/Draft workflow</strong> — edit locally, publish when ready</li>
+                <li><strong>Workspace sharing</strong> — share a Drive folder, everyone sees published pages</li>
                 <li><strong>Image support</strong> — paste or drag images, stored on Drive</li>
                 <li><strong>Version history</strong> — every publish creates a Drive revision you can restore</li>
                 <li><strong>Full-text search</strong> — instant search across all your pages</li>
@@ -188,24 +156,12 @@
         </div>
 
         <div class="card">
-            <h2>Getting started</h2>
-            <p>HexNote connects to Google Drive through a Google Cloud project that <strong>you</strong> own, so no one else (including the HexNote authors) ever handles your sign-in. Setting that up is a one-time job of about 10 to 15 minutes. It is free.</p>
-            <ol class="steps">
-                <li><strong>Create Google Cloud credentials.</strong> In Google Cloud Console: create a project, enable the Google Drive API, create an OAuth client ID of type <em>Desktop app</em>, and download its JSON file. The <a href="https://github.com/Demoneyejin/HexNote#quick-start">step-by-step guide</a> walks through every screen.</li>
-                <li><strong>Set the consent screen to <em>In production</em>.</strong> While it says <em>Testing</em>, Google signs you out every 7 days.</li>
-                <li><strong>Open HexNote and paste the JSON.</strong> The first screen asks for it and shows the same guide.</li>
-                <li><strong>Sign in with Google</strong> in the browser window that opens.</li>
-                <li><strong>Choose or create a Drive folder</strong> for your workspace, or join a folder someone shared with you.</li>
-            </ol>
-            <p class="note">Working with a team? The person who created the Cloud project can share the same credentials file with teammates (add them as test users if the project is still in Testing). Builds that include HexNote's own sign-in also offer a <strong>Solo mode</strong> with no Cloud setup at all; it can only see files HexNote created, so it suits personal wikis. See <a href="https://github.com/Demoneyejin/HexNote#solo-mode-and-team-mode">Solo mode and Team mode</a>.</p>
-
-            <h2 style="margin-top: 28px;">How it works</h2>
-            <ul>
-                <li>Everything you write is <strong>saved on your PC</strong> first. The status line says <em>Saved on this PC · not published</em>.</li>
-                <li><strong>Publish</strong> puts the page on Google Drive as a <code>.md</code> file (images go in an <code>assets</code> folder, linked with relative paths so the files work in any markdown viewer).</li>
-                <li>Teammates' HexNote <strong>refreshes from Drive</strong> every couple of minutes and whenever the window comes back to the front.</li>
-                <li>Every publish is a Drive revision you can preview and restore.</li>
-            </ul>
+            <h2>How It Works</h2>
+            <p>1. Sign in with your Google account</p>
+            <p>2. Pick a Google Drive folder to use as your workspace</p>
+            <p>3. Write and edit documents locally (they stay as drafts)</p>
+            <p>4. Click <strong>Publish</strong> to push to Drive as markdown files</p>
+            <p>5. Collaborators join the workspace and see published pages</p>
         </div>
 
         <div class="card">

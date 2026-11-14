@@ -27,23 +27,18 @@ HexNote is a **free desktop wiki/knowledge base** that replaces Confluence, Noti
 
 ---
 
-## Solo mode and Team mode
+## Signing in
 
-HexNote can sign in to Google in two ways. Which ones you see depends on the build.
+HexNote signs in to Google in one of two ways. Both ask for the same Google Drive access and give you the same features.
 
-| | **Solo mode** | **Team mode** |
-|---|---|---|
-| Sign-in | "Sign in with Google" using HexNote's own OAuth client | Your team's own Google Cloud project (bring your own key) |
-| Setup | None: three steps from download to first page (sign in, name a workspace, write) | One person creates a Cloud project once (10 to 15 minutes) and shares the credentials file |
-| Google Drive scope | `drive.file`: HexNote only sees files and folders it created (or you opened with it) | `drive`: full Drive access, which shared folders need |
-| New workspace | You name it; HexNote creates the folder in your My Drive | Pick any Drive folder, or create one |
-| Join a folder someone shared with you | Not possible (the folder is invisible to `drive.file`) | Yes: search shared folders or paste a link |
-| Share a workspace | You can invite people to the Drive folder; to edit it in HexNote they need Team mode | Yes |
-| Available in | Builds that bundle HexNote's verified client (see *Building from Source*) | Every build |
+- **Sign in with Google** (builds that include HexNote's own Google sign-in): no setup. Sign in, choose or join a workspace folder, write.
+- **Your own Google Cloud credentials** (every build): one person creates a Cloud project once (10 to 15 minutes) and can share its credentials file with teammates. This is the only option in a build without HexNote's sign-in, and stays available in the others through the link under the sign-in button or **Settings > Account**.
 
-Switching modes (the link under the sign-in button, or **Settings > Account**) asks you to sign in again, because the two modes use different permissions. Your pages on this PC are kept. Workspaces created in Team mode stay listed, but Solo mode cannot see their Drive folders unless HexNote created them.
+Switching between the two asks you to sign in again, because a sign-in belongs to the client that issued it. Your pages and workspaces are kept.
 
-The rest of this section describes **Team mode**, which is also what a build without a bundled client uses.
+HexNote asks for Google's full Drive permission because a team works in a shared folder: the narrower per-file permission (`drive.file`) cannot see pages a teammate created, even inside a folder shared with you.
+
+The Quick Start below describes setting up your own credentials.
 
 ## Quick Start
 
@@ -168,16 +163,16 @@ cd HexNote
 wails build -ldflags "-s -w"
 ```
 
-The binary is at `build/bin/hexnote.exe`. Built like this it offers Team mode only: each user pastes an OAuth client JSON on first launch. No credentials are compiled in.
+The binary is at `build/bin/hexnote.exe`. Built like this it has no sign-in of its own: each user pastes an OAuth client JSON on first launch. No credentials are compiled in.
 
-To build with **Solo mode** as well, use `./build.sh` (or `build.bat` on Windows) with HexNote's verified OAuth client in a `.env` file that is never committed:
+To build with HexNote's own **Sign in with Google**, use `./build.sh` (or `build.bat` on Windows) with HexNote's OAuth client in a `.env` file that is never committed:
 
 ```bash
 HEXNOTE_CLIENT_ID=....apps.googleusercontent.com
 HEXNOTE_CLIENT_SECRET=...
 ```
 
-The scripts inject them with `-X hexnote/internal/drive.bundledClientID=...` and `-X hexnote/internal/drive.bundledClientSecret=...`. Without a `.env` they build the Team-only app. A desktop client's secret is not confidential (Google treats installed apps as public clients); the sign-in is protected by PKCE. The bundled client must request only `drive.file`, which Google classes as non-sensitive, so it can be verified without the paid security assessment that the restricted `drive` scope needs.
+The scripts inject them with `-X hexnote/internal/drive.bundledClientID=...` and `-X hexnote/internal/drive.bundledClientSecret=...`. Without a `.env` they build the bring-your-own-credentials app. A desktop client's secret is not confidential (Google treats installed apps as public clients); the sign-in is protected by PKCE. The bundled client requests the `drive` scope, which Google classes as restricted: until Google has verified the app for it, people signing in see an "unverified app" warning and the project is limited to 100 users.
 
 ### Tests
 
