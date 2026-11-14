@@ -86,27 +86,55 @@
         <header>
             <a href="index.html" class="back-link">&larr; Back to HexNote</a>
             <h1>Privacy Policy</h1>
-            <p class="updated">Last updated: April 2026</p>
+            <p class="updated">Last updated: November 2026</p>
         </header>
 
         <div class="card">
             <h2>Summary</h2>
-            <p>HexNote does not collect, store, or transmit any of your personal data. Your documents live on your own machine and your own Google Drive account. We have zero access to your content.</p>
+            <p>HexNote is a desktop application. It has no server: the developer of HexNote does not collect, receive, or store any of your personal data or your Google user data. Your documents live on your own machine and in your own Google Drive account, and everything HexNote reads from Google stays on your device.</p>
 
-            <h2>What HexNote accesses</h2>
+            <h2>Google user data HexNote accesses</h2>
+            <p>When you sign in with Google, HexNote requests the Google Drive scope (<code>https://www.googleapis.com/auth/drive</code>). With it, the app running on your computer accesses:</p>
             <ul>
-                <li><strong>Google Drive</strong>: HexNote reads and writes markdown files and images to folders you explicitly choose in your own Google Drive. This requires Google OAuth sign-in with the <code>drive</code> scope.</li>
-                <li><strong>Local storage</strong>: HexNote stores a local SQLite database and image cache in your system's application data directory (<code>%APPDATA%/HexNote</code> on Windows, <code>~/Library/Application Support/HexNote</code> on macOS). This data never leaves your machine.</li>
+                <li><strong>Folder names</strong>: the names and IDs of folders in your Drive and of folders shared with you, so you can choose or join a workspace folder.</li>
+                <li><strong>Files in your workspace folders</strong>: the names, modification times, contents, and revision history of the markdown files and images inside the folders you select as workspaces.</li>
+                <li><strong>Sharing information for workspace folders</strong>: the names, email addresses, and roles of the people a workspace folder is shared with, so you can view and manage collaborators.</li>
+                <li><strong>Your Google account email address</strong>: shown in the app so you can see which account is signed in.</li>
             </ul>
+
+            <h2>How HexNote uses this data</h2>
+            <p>Google user data is used only to provide the features you see in the app:</p>
+            <ul>
+                <li>Listing folders so you can pick a workspace</li>
+                <li>Downloading pages and images from your workspace folders so you can read and edit them</li>
+                <li>Uploading pages and images to your workspace folders when you click Publish</li>
+                <li>Showing and restoring earlier versions of a page</li>
+                <li>Adding or removing collaborators on a workspace folder when you ask it to</li>
+            </ul>
+            <p>HexNote reads and writes file contents only inside the folders you select as workspaces. It does not use your data for advertising, analytics, profiling, or training AI or machine-learning models.</p>
+
+            <h2>How this data is stored</h2>
+            <ul>
+                <li><strong>On your device only</strong>: HexNote keeps a local SQLite database (your pages, workspace list, and workspace collaborator list) and an image cache in your system's application data directory (<code>%APPDATA%/HexNote</code> on Windows, <code>~/Library/Application Support/HexNote</code> on macOS).</li>
+                <li><strong>OAuth tokens</strong>: the token Google issues when you sign in is stored in that same directory on your machine and is sent only to Google.</li>
+                <li><strong>No developer servers</strong>: there is no HexNote backend. Data travels directly between your computer and Google's APIs over HTTPS.</li>
+            </ul>
+
+            <h2>How this data is shared</h2>
+            <p>HexNote does not share, sell, or transfer your Google user data to anyone. The only sharing that happens is sharing you perform yourself: when you add a collaborator to a workspace, HexNote asks Google Drive to share that folder with the email address you entered.</p>
+
+            <h2>Limited Use</h2>
+            <p>HexNote's use and transfer of information received from Google APIs to any other app will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
 
             <h2>What HexNote does NOT do</h2>
             <ul>
                 <li>We do not collect analytics or telemetry</li>
                 <li>We do not track usage patterns</li>
-                <li>We do not store your Google account credentials (OAuth tokens are stored locally on your machine only)</li>
+                <li>We do not store your Google account password (sign-in happens on Google's own page, in your browser)</li>
                 <li>We do not have a server — there is no backend that receives your data</li>
                 <li>We do not sell, share, or transfer any user data to third parties</li>
-                <li>We do not access any Google Drive files or folders beyond the ones you explicitly select as workspaces</li>
+                <li>We do not read or modify the contents of Drive files outside the folders you select as workspaces</li>
+                <li>No human other than you (and the collaborators you invite) can read your data through HexNote</li>
             </ul>
 
             <h2>Google OAuth</h2>
@@ -119,8 +147,8 @@
             </ul>
             <p>You can revoke access at any time from your <a href="https://myaccount.google.com/permissions">Google Account permissions page</a>.</p>
 
-            <h2>Data deletion</h2>
-            <p>To remove all HexNote data from your machine:</p>
+            <h2>Data retention and deletion</h2>
+            <p>HexNote keeps its local data until you remove it. Because nothing is stored on a developer server, there is nothing for us to retain or delete on your behalf. To remove all HexNote data from your machine:</p>
             <ul>
                 <li>Uninstall the application</li>
                 <li>Delete the <code>HexNote</code> folder from your application data directory</li>
