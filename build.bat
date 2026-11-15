@@ -14,9 +14,8 @@ REM They are injected into the binary at compile time, never in source code.
 
 REM Load .env file
 if exist .env (
-    for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
-        if not "%%a"=="" if not "%%a:~0,1%"=="#" set "%%a=%%b"
-    )
+    REM eol=# skips comment lines; for /f already skips blank ones
+    for /f "usebackq eol=# tokens=1,* delims==" %%a in (".env") do set "%%a=%%b"
 )
 
 if not "%HEXNOTE_CLIENT_ID%"=="" if not "%HEXNOTE_CLIENT_SECRET%"=="" goto bundled
