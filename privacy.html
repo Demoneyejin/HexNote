@@ -119,6 +119,19 @@
             </ul>
             <p>None of this leaves your PC except what you publish to Google Drive.</p>
 
+            <h2>How your data is protected</h2>
+            <p>HexNote handles sensitive data: the contents of your pages, the names and email addresses of the people a workspace is shared with, and the token that lets the app act on your Google Drive. It is protected in these ways:</p>
+            <ul>
+                <li><strong>Encrypted in transit</strong>: HexNote exchanges data only with Google's servers, and every request uses HTTPS (TLS). Nothing is sent over an unencrypted connection, and nothing is sent to the HexNote authors or any other party.</li>
+                <li><strong>Sign-in on Google's own page</strong>: you enter your password in your browser on Google's site, never in HexNote. The app receives the result on a local address on your own PC, and the exchange is protected with PKCE (RFC 7636), so a sign-in code intercepted by another program cannot be turned into a token.</li>
+                <li><strong>No copy on any server</strong>: there is no HexNote server, so there is no central database of user data or tokens that could be breached. The only copies of your data are on your PC and in your Google Drive.</li>
+                <li><strong>In Google Drive</strong>: your published pages stay in your own Drive, where Google encrypts them at rest and your Google account's sign-in and sharing settings control who can open them.</li>
+                <li><strong>On your PC</strong>: the files listed above are kept inside your own user profile, which your operating system restricts to your user account. The token and credential files are written with owner-only permissions. HexNote does not add its own encryption to these files, so they are protected by your operating system account and, if you have it turned on, your disk encryption (BitLocker on Windows, FileVault on macOS).</li>
+                <li><strong>Access you can end at any time</strong>: signing out deletes the token from your PC, and revoking HexNote in your Google Account makes any copy of the token useless.</li>
+                <li><strong>No access by people</strong>: the HexNote authors cannot see your data. Nobody but you, and the collaborators you invite to a workspace, can read it through HexNote.</li>
+            </ul>
+            <p>If you believe your PC or your HexNote token has been compromised, revoke HexNote from your <a href="https://myaccount.google.com/permissions">Google Account permissions page</a> and sign in again.</p>
+
             <h2>What HexNote does NOT do</h2>
             <ul>
                 <li>We do not collect analytics or telemetry</li>
