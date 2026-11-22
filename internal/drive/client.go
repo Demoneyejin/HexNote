@@ -202,6 +202,19 @@ func (c *Client) UpdateFile(fileID, name, content string) error {
 	return nil
 }
 
+// TrashFile moves a file or folder to the Drive trash (recoverable for 30 days).
+// Trashing a folder also trashes everything inside it. ListFiles filters out
+// trashed items, so sync will not re-create a trashed page locally.
+func (c *Client) TrashFile(fileID string) error {
+	_, err := c.service.Files.Update(fileID, &drive.File{Trashed: true}).
+		SupportsAllDrives(true).
+		Do()
+	if err != nil {
+		return fmt.Errorf("move to Drive trash: %w", err)
+	}
+	return nil
+}
+
 // GetFileModifiedTime returns the current modifiedTime of a file on Drive.
 // Used before pushing to check if someone else modified the file since our last sync.
 func (c *Client) GetFileModifiedTime(fileID string) (string, error) {
