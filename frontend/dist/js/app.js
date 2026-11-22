@@ -15,6 +15,7 @@
     var autoSaveDelay = 2000;
     var selectedRevisionId = null;
     var lastKnownContent = '';  // tracks the last content loaded/saved to DB — prevents auto-save from re-dirtying unchanged docs
+    var lastKnownTitle = '';    // same, for the title — a title-only edit must still count as a change
 
     // === View Management ===
     var ALL_VIEWS = ['view-credentials', 'view-signin', 'view-path-choice', 'view-workspaces', 'view-onboarding', 'view-join', 'view-editor'];
@@ -649,6 +650,9 @@
             },
         });
 
+        // Render ```mermaid code blocks as diagrams (see mermaid-block.js)
+        HexMermaid.attach(editor);
+
         // Build the toolbar for TipTap (it doesn't include one by default)
         buildEditorToolbar();
     }
@@ -724,6 +728,7 @@
             ],
             [
                 { label: '{}', title: 'Code Block', cmd: function () { editor.chain().focus().toggleCodeBlock().run(); }, active: function () { return editor.isActive('codeBlock'); } },
+                { label: '⎇', title: 'Mermaid Diagram', cmd: function () { HexMermaid.insert(editor); }, active: function () { return HexMermaid.isActive(editor); } },
             ],
         ];
 
@@ -984,7 +989,10 @@
             if (!confirm('Restore this version? Your current content will be replaced.')) return;
             try {
                 var doc = await window.go.main.App.RestoreVersion(currentDocId, selectedRevisionId);
-                editor.commands.setContent(doc.content || '');
+                // RestoreVersion already saved this to the DB — record it so auto-save doesn't re-save it
+                lastKnownContent = doc.content || '';
+                lastKnownTitle = doc.title || '';
+                editor.commands.setContent(lastKnownContent);
                 document.getElementById('doc-title').value = doc.title;
                 document.getElementById('history-modal').classList.add('hidden');
                 showToast('Version restored', 'success');
@@ -1127,6 +1135,7 @@
         try {
             var doc = await window.go.main.App.GetDocument(id);
             document.getElementById('doc-title').value = doc.title;
+            lastKnownTitle = doc.title || '';
             lastKnownContent = doc.content || '';
             editor.commands.setContent(lastKnownContent);
             document.getElementById('editor-container').classList.remove('hidden');
@@ -1159,20 +1168,62 @@
         }
     }
 
-    async function deleteCurrentDoc() {
-        if (!currentDocId) return;
-        if (!confirm('Delete this page? This cannot be undone.')) return;
+    function findTreeNode(nodes, id) {
+        for (var i = 0; i < (nodes || []).length; i++) {
+            if (nodes[i].document.id === id) return nodes[i];
+            var found = findTreeNode(nodes[i].children, id);
+            if (found) return found;
+        }
+        return null;
+    }
+
+    function subtreeHasPublished(node) {
+        if (node.document.driveFileId) return true;
+        return (node.children || []).some(subtreeHasPublished);
+    }
+
+    // The warning must match what the backend does: anything published goes to the
+    // Drive trash (recoverable, gone for collaborators); never-published drafts are
+    // deleted outright.
+    function deleteWarning(node) {
+        var doc = node.document;
+        var name = '"' + (doc.title || 'Untitled') + '"';
+        var hasChildren = doc.isFolder && node.children && node.children.length > 0;
+        var what = doc.isFolder ? 'folder ' + name + (hasChildren ? ' and everything inside it' : '') : name;
+        if (subtreeHasPublished(node)) {
+            return 'Delete ' + what + ' for everyone?\n\n' +
+                "Published pages will be moved to the Google Drive trash, where the folder's owner can restore them for 30 days. " +
+                'Collaborators will no longer see them.\n\n' +
+                'Edits on this computer that were never published cannot be recovered.';
+        }
+        return 'Delete ' + what + '?\n\nIt has never been published, so it cannot be recovered.';
+    }
+
+    async function deleteDoc(id) {
+        var node = findTreeNode(tree, id);
+        if (!node) return;
+        if (!confirm(deleteWarning(node))) return;
         try {
-            await window.go.main.App.DeleteDocument(currentDocId);
-            currentDocId = null;
-            document.getElementById('editor-container').classList.add('hidden');
+            await window.go.main.App.DeleteDocument(id);
+            // The open page may be the deleted item or inside a deleted folder
+            if (currentDocId && (currentDocId === id || findTreeNode(node.children, currentDocId))) {
+                currentDocId = null;
+                window.__hexnoteHasUnsaved = false;
+                clearTimeout(saveTimeout);
+                document.getElementById('editor-container').classList.add('hidden');
+            }
             await loadTree();
             updateEmptyState();
             showToast('Deleted', 'info');
         } catch (e) {
-            console.error('deleteCurrentDoc error:', e);
-            showToast('Error deleting document', 'error');
+            console.error('deleteDoc error:', e);
+            showToast("Couldn't delete: " + (e.message || e), 'error', 8000);
         }
+    }
+
+    async function deleteCurrentDoc() {
+        if (!currentDocId) return;
+        await deleteDoc(currentDocId);
     }
 
     function onEditorChange() {
@@ -1191,6 +1242,7 @@
 
     function onTitleChange() {
         if (!currentDocId) return;
+        window.__hexnoteHasUnsaved = true;
         setSaveStatus('Unsaved');
         clearTimeout(saveTimeout);
         saveTimeout = setTimeout(saveNow, autoSaveDelay);
@@ -1201,9 +1253,9 @@
         clearTimeout(saveTimeout);
         var title = document.getElementById('doc-title').value.trim() || 'Untitled';
         var content = editor.storage.markdown.getMarkdown();
-        // Skip the save if content hasn't actually changed from what we loaded/last saved.
+        // Skip the save if neither title nor content changed from what we loaded/last saved.
         // This prevents auto-save from re-dirtying a document that was just updated by sync.
-        if (content.trim() === lastKnownContent.trim()) {
+        if (content.trim() === lastKnownContent.trim() && title === lastKnownTitle) {
             window.__hexnoteHasUnsaved = false;
             setSaveStatus('Saved');
             return;
@@ -1212,6 +1264,7 @@
         try {
             var doc = await window.go.main.App.UpdateDocument(currentDocId, title, content);
             lastKnownContent = content;
+            lastKnownTitle = title;
             window.__hexnoteHasUnsaved = false;
             setSaveStatus('Saved');
             // Editing sets status to 'draft' — show the Publish button
@@ -1297,18 +1350,16 @@
                 var newTitle = prompt('Rename:', contextTarget.title);
                 if (newTitle && newTitle.trim()) {
                     await window.go.main.App.UpdateDocument(contextTarget.id, newTitle.trim(), contextTarget.content || '');
-                    if (currentDocId === contextTarget.id) document.getElementById('doc-title').value = newTitle.trim();
+                    if (currentDocId === contextTarget.id) {
+                        document.getElementById('doc-title').value = newTitle.trim();
+                        lastKnownTitle = newTitle.trim();
+                    }
                     await loadTree();
                 }
                 break;
             case 'delete':
                 if (!contextTarget) break;
-                if (confirm('Delete "' + contextTarget.title + '"?')) {
-                    await window.go.main.App.DeleteDocument(contextTarget.id);
-                    if (currentDocId === contextTarget.id) { currentDocId = null; document.getElementById('editor-container').classList.add('hidden'); }
-                    await loadTree();
-                    updateEmptyState();
-                }
+                await deleteDoc(contextTarget.id);
                 break;
         }
         contextTarget = null;

@@ -204,11 +204,70 @@ func (a *App) UpdateDocument(id string, title string, content string) (*models.D
 	return a.db.UpdateDocument(id, title, content)
 }
 
+// DeleteDocument deletes a page or folder (and its children) for everyone:
+// anything published is moved to the Drive trash first, then the local copy
+// is removed. Without the Drive step the page would stay visible to
+// collaborators and the next sync would re-create it locally.
+// If trashing fails, nothing is deleted locally so the user can retry.
 func (a *App) DeleteDocument(id string) error {
 	if _, err := a.getValidatedDoc(id); err != nil {
 		return err
 	}
+
+	node, err := a.findTreeNode(id)
+	if err != nil {
+		return err
+	}
+	if trashIDs := driveIDsToTrash(node); len(trashIDs) > 0 {
+		if a.driveClient == nil {
+			return fmt.Errorf("sign in to delete published pages — they also need to be removed from Google Drive")
+		}
+		for _, fileID := range trashIDs {
+			if err := a.driveClient.TrashFile(fileID); err != nil {
+				return fmt.Errorf("couldn't remove it from Google Drive, so nothing was deleted (you may only have view access): %w", err)
+			}
+		}
+	}
+
 	return a.db.DeleteDocument(id)
+}
+
+// findTreeNode returns the subtree rooted at id within the active workspace.
+func (a *App) findTreeNode(id string) (*models.TreeNode, error) {
+	roots, err := a.GetDocumentTree()
+	if err != nil {
+		return nil, err
+	}
+	var walk func([]*models.TreeNode) *models.TreeNode
+	walk = func(nodes []*models.TreeNode) *models.TreeNode {
+		for _, n := range nodes {
+			if n.Document.ID == id {
+				return n
+			}
+			if found := walk(n.Children); found != nil {
+				return found
+			}
+		}
+		return nil
+	}
+	if n := walk(roots); n != nil {
+		return n, nil
+	}
+	return nil, fmt.Errorf("document not found")
+}
+
+// driveIDsToTrash returns the Drive IDs of the topmost published items in a
+// subtree. A published item's descendants are skipped because trashing a
+// Drive folder already trashes its contents.
+func driveIDsToTrash(node *models.TreeNode) []string {
+	if node.Document.DriveFileID != "" {
+		return []string{node.Document.DriveFileID}
+	}
+	var ids []string
+	for _, child := range node.Children {
+		ids = append(ids, driveIDsToTrash(child)...)
+	}
+	return ids
 }
 
 func (a *App) MoveDocument(id string, newParentID string) error {
