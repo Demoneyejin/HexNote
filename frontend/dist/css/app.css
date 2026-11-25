@@ -602,6 +602,46 @@ html, body {
     font-size: 0.9em;
 }
 
+/* Mermaid diagram blocks (a ```mermaid code block with a rendered preview) */
+#editor .ProseMirror .mermaid-block {
+    margin: 1em 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+#editor .ProseMirror .mermaid-block.is-editing { border-color: var(--primary); }
+#editor .ProseMirror .mermaid-block pre {
+    margin: 0;
+    border-radius: 0;
+    border-bottom: 1px solid var(--border);
+}
+/* Collapsed rather than display:none so the caret can still arrow into the source */
+#editor .ProseMirror .mermaid-block:not(.is-editing) pre {
+    height: 0;
+    padding: 0;
+    border: 0;
+    overflow: hidden;
+    opacity: 0;
+}
+#editor .ProseMirror .mermaid-preview {
+    padding: 16px;
+    text-align: center;
+    overflow-x: auto;
+    cursor: pointer;
+    user-select: none;
+}
+#editor .ProseMirror .mermaid-preview svg { max-width: 100%; height: auto; }
+#editor .ProseMirror .mermaid-preview.is-message {
+    color: var(--text-muted);
+    font-size: 0.9em;
+}
+#editor .ProseMirror .mermaid-preview.is-error {
+    color: var(--danger);
+    font-family: var(--font-mono);
+    text-align: left;
+    white-space: pre-wrap;
+}
+
 /* Blockquote */
 #editor .ProseMirror blockquote, .history-preview-body .ProseMirror blockquote {
     border-left: 3px solid var(--primary);
