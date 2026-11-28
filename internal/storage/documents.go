@@ -84,6 +84,24 @@ func (d *Database) UpdateDocument(id, title, content string) (*models.Document, 
 	return doc, nil
 }
 
+// RenameDocument changes only the title. The caller decides the status.
+func (d *Database) RenameDocument(id, title string) error {
+	res, err := d.db.Exec(
+		`UPDATE documents SET title = ?, is_dirty = 1, updated_at = ? WHERE id = ?`,
+		title, formatTime(time.Now().UTC()), id,
+	)
+	if err != nil {
+		return fmt.Errorf("rename document: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	if doc, err := d.GetDocument(id); err == nil {
+		d.indexDocument(doc)
+	}
+	return nil
+}
+
 func (d *Database) DeleteDocument(id string) error {
 	// Recursively delete children first
 	rows, err := d.db.Query("SELECT id FROM documents WHERE parent_id = ?", id)
@@ -135,6 +153,98 @@ func (d *Database) MoveDocument(id, newParentID string) error {
 		sqlParentID, maxOrder+1, formatTime(time.Now().UTC()), id,
 	)
 	return err
+}
+
+// PlaceDocument puts a document under newParentID ("" = top level) at the
+// position just before beforeID ("" = at the end) and renumbers that
+// folder's children. It changes neither the dirty flag nor the status:
+// ordering is local to this PC.
+func (d *Database) PlaceDocument(id, newParentID, beforeID string) error {
+	doc, err := d.GetDocument(id)
+	if err != nil {
+		return err
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`UPDATE documents SET parent_id = ?, updated_at = ? WHERE id = ?`,
+		nullIfEmpty(newParentID), formatTime(time.Now().UTC()), id); err != nil {
+		return fmt.Errorf("move document: %w", err)
+	}
+
+	rows, err := tx.Query(
+		`SELECT id FROM documents WHERE parent_id IS ? AND workspace_id IS ? AND id != ? ORDER BY sort_order, created_at`,
+		nullIfEmpty(newParentID), nullIfEmpty(doc.WorkspaceID), id,
+	)
+	if err != nil {
+		return err
+	}
+	var siblings []string
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			rows.Close()
+			return err
+		}
+		siblings = append(siblings, sid)
+	}
+	rows.Close()
+
+	ordered := make([]string, 0, len(siblings)+1)
+	placed := false
+	for _, sid := range siblings {
+		if sid == beforeID && !placed {
+			ordered = append(ordered, id)
+			placed = true
+		}
+		ordered = append(ordered, sid)
+	}
+	if !placed {
+		ordered = append(ordered, id)
+	}
+	for i, sid := range ordered {
+		if _, err := tx.Exec(`UPDATE documents SET sort_order = ? WHERE id = ?`, i, sid); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// SetParentFromSync moves a document to another folder because it moved on
+// Drive, appending it to the end of that folder.
+func (d *Database) SetParentFromSync(id, parentID string) error {
+	doc, err := d.GetDocument(id)
+	if err != nil {
+		return err
+	}
+	var maxOrder int
+	d.db.QueryRow(
+		"SELECT COALESCE(MAX(sort_order), -1) FROM documents WHERE parent_id IS ? AND workspace_id IS ?",
+		nullIfEmpty(parentID), nullIfEmpty(doc.WorkspaceID),
+	).Scan(&maxOrder)
+	_, err = d.db.Exec(`UPDATE documents SET parent_id = ?, sort_order = ? WHERE id = ?`,
+		nullIfEmpty(parentID), maxOrder+1, id)
+	return err
+}
+
+// IsDescendant reports whether id is ancestorID itself or sits below it.
+func (d *Database) IsDescendant(id, ancestorID string) bool {
+	seen := map[string]bool{}
+	for cur := id; cur != "" && !seen[cur]; {
+		if cur == ancestorID {
+			return true
+		}
+		seen[cur] = true
+		doc, err := d.GetDocument(cur)
+		if err != nil {
+			return false
+		}
+		cur = doc.ParentID
+	}
+	return false
 }
 
 func (d *Database) GetDocumentTree(workspaceID string) ([]*models.TreeNode, error) {
@@ -334,6 +444,29 @@ func (d *Database) UpdateDocumentFromSync(id, title, content string) error {
 		d.indexDocument(doc)
 	}
 	return nil
+}
+
+// UpdatePublishedFromSync applies a newer Drive version to a document only
+// if it is still published, in one statement. A local edit saved while the
+// refresh was running (which makes the page a draft) is never overwritten.
+// Reports whether the document was updated.
+func (d *Database) UpdatePublishedFromSync(id, title, content string, driveModifiedAt time.Time) (bool, error) {
+	res, err := d.db.Exec(
+		`UPDATE documents SET title = ?, content = ?, updated_at = ?, drive_modified_at = ?, is_dirty = 0
+		 WHERE id = ? AND status = 'published'`,
+		title, content, formatTime(time.Now().UTC()), formatTime(driveModifiedAt), id,
+	)
+	if err != nil {
+		return false, fmt.Errorf("sync update document: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return false, nil
+	}
+	if doc, _ := d.GetDocument(id); doc != nil {
+		d.indexDocument(doc)
+	}
+	return true, nil
 }
 
 func (d *Database) SetDocumentStatus(docID, status string) error {

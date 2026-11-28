@@ -11,15 +11,17 @@
     <div id="view-credentials" class="view hidden">
         <div class="setup-card">
             <h1 class="setup-title">HexNote</h1>
-            <h2>Welcome! One-time Setup</h2>
-            <p class="setup-desc">HexNote stores your docs on <strong>your own Google Drive</strong>. To get started, you'll need free Google Cloud credentials. This takes about 5 minutes and only needs to be done once.</p>
+            <h2 id="credentials-heading">Welcome! One-time Setup</h2>
+            <p id="credentials-intro" class="setup-desc">HexNote stores your docs on <strong>your own Google Drive</strong>. To get started, you'll need free Google Cloud credentials. This takes about 10 to 15 minutes and only needs to be done once.</p>
+            <p id="credentials-own-intro" class="setup-desc hidden">Most people don't need this. If you would rather not use HexNote's own Google sign-in, you can sign in through a Google Cloud project you control instead (about 10 to 15 minutes, free). Teammates can share one credentials file. HexNote asks for the same Google Drive access either way.</p>
             <details class="setup-guide">
-                <summary class="setup-guide-toggle">Show me how (5-minute setup guide)</summary>
+                <summary class="setup-guide-toggle">Show me how (step-by-step setup guide)</summary>
                 <ol class="setup-steps">
                     <li>Go to <a href="#" id="link-gcp">Google Cloud Console</a> and create a new project</li>
                     <li>Go to <strong>APIs &amp; Services</strong> &rarr; <strong>Library</strong> &rarr; search <strong>Google Drive API</strong> &rarr; <strong>Enable</strong></li>
                     <li>Go to <strong>APIs &amp; Services</strong> &rarr; <strong>Credentials</strong> &rarr; <strong>+ Create Credentials</strong> &rarr; <strong>OAuth client ID</strong></li>
                     <li>If prompted, configure the <strong>OAuth consent screen</strong> (External, fill in your email, skip the rest)</li>
+                    <li>On the <strong>OAuth consent screen</strong> page, set <strong>Publishing status</strong> to <strong>In production</strong>. While it says <em>Testing</em>, Google expires your sign-in every 7 days.</li>
                     <li>Application type: <strong>Desktop app</strong> &rarr; <strong>Create</strong></li>
                     <li>Click the <strong>download icon</strong> to get the JSON file</li>
                     <li>Open the JSON file, copy its contents, and paste below</li>
@@ -29,6 +31,8 @@
             <textarea id="credentials-json" placeholder='Paste the contents of your downloaded credentials JSON file here...' rows="6"></textarea>
             <button id="btn-save-credentials" class="btn-primary">Save &amp; Continue</button>
             <p id="credentials-error" class="error-text hidden"></p>
+            <button id="btn-credentials-back" class="btn-link btn-muted hidden">Back</button>
+            <button id="btn-use-bundled-from-creds" class="btn-link btn-muted hidden">Use HexNote's sign-in instead</button>
         </div>
     </div>
 
@@ -36,12 +40,14 @@
     <div id="view-signin" class="view hidden">
         <div class="setup-card">
             <h1 class="setup-title">HexNote</h1>
-            <h2>Sign in to Google</h2>
-            <p class="setup-desc">Click below to authenticate with your Google account. A browser window will open.</p>
+            <h2 id="signin-heading">Sign in to Google</h2>
+            <p id="signin-notice" class="notice-text hidden" role="status"></p>
+            <p id="signin-desc" class="setup-desc">Click below to authenticate with your Google account. A browser window will open.</p>
             <button id="btn-google-signin" class="btn-primary btn-large">Sign in with Google</button>
             <p id="signin-waiting" class="status-text hidden">Waiting for authentication... Check your browser.</p>
             <p id="signin-error" class="error-text hidden"></p>
             <button id="btn-custom-credentials" class="btn-link btn-muted">Change API credentials</button>
+            <button id="btn-use-bundled" class="btn-link btn-muted hidden">Use HexNote's sign-in instead</button>
         </div>
     </div>
 
@@ -69,7 +75,7 @@
                         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                     </div>
                     <h3>Join a shared workspace</h3>
-                    <p>Open a workspace someone shared with you</p>
+                    <p id="path-join-desc">Open a workspace someone shared with you</p>
                 </button>
             </div>
         </div>
@@ -159,6 +165,8 @@
         </div>
     </div>
 
+    </div>
+
     <!-- === Editor View (Phase 1 UI, now with workspace header) === -->
     <div id="view-editor" class="view hidden">
         <div id="app-layout" class="app-layout">
@@ -166,35 +174,38 @@
             <aside id="sidebar">
                 <div class="sidebar-header">
                     <div class="sidebar-title-row">
-                        <button id="btn-back-ws" class="btn-back" title="Back to Workspaces">&larr;</button>
+                        <button id="btn-back-ws" class="btn-back" title="Back to Workspaces" aria-label="Back to Workspaces">&larr;</button>
                         <h1 class="app-title" id="workspace-title">Workspace</h1>
+                        <button id="btn-open-drive" class="btn-icon btn-open-drive" title="Open this workspace's folder in Google Drive" aria-label="Open in Google Drive">
+                            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9 3h4v4M13 3L7.5 8.5M11 9.5V13H3V5h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
                     </div>
                     <div class="sidebar-actions">
-                        <button id="btn-sync" class="btn-icon" title="Sync with Drive">
+                        <button id="btn-sync" class="btn-icon" title="Refresh from Drive: get pages your teammates published" aria-label="Refresh from Drive">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 8a6 6 0 0110.89-3.48M14 8a6 6 0 01-10.89 3.48" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M14 2v4h-4M2 14v-4h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         </button>
-                        <button id="btn-share" class="btn-icon" title="Share Workspace">
+                        <button id="btn-share" class="btn-icon" title="Share workspace" aria-label="Share workspace">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="4" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="4" r="2" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M6 7l4-2M6 9l4 2" stroke="currentColor" stroke-width="1.5"/></svg>
                         </button>
-                        <button id="btn-settings" class="btn-icon" title="Settings">
+                        <button id="btn-settings" class="btn-icon" title="Settings" aria-label="Settings">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.5"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.93 2.93l1.41 1.41M11.66 11.66l1.41 1.41M2.93 13.07l1.41-1.41M11.66 4.34l1.41-1.41" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                         </button>
                         <div class="sidebar-actions-sep"></div>
-                        <button id="btn-new-page" class="btn-icon" title="New Page">
+                        <button id="btn-new-page" class="btn-icon" title="New page (Ctrl+N)" aria-label="New page" aria-keyshortcuts="Control+N">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                         </button>
-                        <button id="btn-new-folder" class="btn-icon" title="New Folder">
+                        <button id="btn-new-folder" class="btn-icon" title="New folder" aria-label="New folder">
                             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4h4l2 2h6v7H2V4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" fill="none"/><path d="M8 8v4M6 10h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
                         </button>
                     </div>
                 </div>
 
                 <div class="search-container">
-                    <input type="text" id="search-input" placeholder="Search pages..." autocomplete="off">
+                    <input type="text" id="search-input" placeholder="Search pages (Ctrl+K)" aria-label="Search pages" aria-keyshortcuts="Control+K" autocomplete="off">
                     <div id="search-results" class="search-results hidden"></div>
                 </div>
 
-                <div id="page-tree" class="page-tree"></div>
+                <div id="page-tree" class="page-tree" role="tree" aria-label="Pages"></div>
                 <div id="sync-status-bar" class="sync-status-bar">
                     <span id="sync-status-text">Ready</span>
                 </div>
@@ -212,15 +223,19 @@
                 </div>
 
                 <div id="editor-container" class="editor-container hidden">
+                    <div id="draft-hint" class="draft-hint hidden" role="note">
+                        <span>Pages stay on this PC until you <strong>Publish</strong>. Teammates see published pages when they <strong>Refresh</strong>.</span>
+                        <button id="btn-dismiss-draft-hint" class="btn-link draft-hint-dismiss">Got it</button>
+                    </div>
                     <div class="editor-header">
-                        <input type="text" id="doc-title" class="doc-title" placeholder="Untitled">
+                        <input type="text" id="doc-title" class="doc-title" placeholder="Untitled" aria-label="Page title">
                         <div class="editor-meta">
-                            <span id="save-status" class="save-status">Saved</span>
+                            <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
                             <button id="btn-publish" class="btn-primary btn-small" title="Publish to Drive" style="display:none;">Publish</button>
-                            <button id="btn-history" class="btn-icon" title="Version History">
+                            <button id="btn-history" class="btn-icon" title="Version history" aria-label="Version history">
                                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </button>
-                            <button id="btn-delete-doc" class="btn-icon btn-danger" title="Delete">
+                            <button id="btn-delete-doc" class="btn-icon btn-danger" title="Delete page" aria-label="Delete page">
                                 <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 4h10M6 4V3h4v1M5 4v8.5a.5.5 0 00.5.5h5a.5.5 0 00.5-.5V4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                             </button>
                         </div>
@@ -232,15 +247,15 @@
     </div>
 
     <!-- === Sharing Modal === -->
-    <div id="sharing-modal" class="modal-overlay hidden">
+    <div id="sharing-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sharing-title">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Share Workspace</h3>
-                <button id="btn-close-sharing" class="btn-icon">&times;</button>
+                <h3 id="sharing-title">Share Workspace</h3>
+                <button id="btn-close-sharing" class="btn-icon" aria-label="Close">&times;</button>
             </div>
             <div class="share-form">
-                <input type="email" id="share-email" placeholder="Email address" class="input-text">
-                <select id="share-role" class="input-select">
+                <input type="email" id="share-email" placeholder="Email address" class="input-text" aria-label="Email address">
+                <select id="share-role" class="input-select" aria-label="Role">
                     <option value="reader">Viewer</option>
                     <option value="writer">Editor</option>
                 </select>
@@ -251,11 +266,11 @@
     </div>
 
     <!-- === Version History Modal === -->
-    <div id="history-modal" class="modal-overlay hidden">
+    <div id="history-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="history-title">
         <div class="modal-content modal-wide">
             <div class="modal-header">
-                <h3>Version History</h3>
-                <button id="btn-close-history" class="btn-icon">&times;</button>
+                <h3 id="history-title">Version History</h3>
+                <button id="btn-close-history" class="btn-icon" aria-label="Close">&times;</button>
             </div>
             <div class="history-layout">
                 <div id="history-list" class="history-list">
@@ -266,20 +281,32 @@
                         <span id="history-preview-date"></span>
                         <button id="btn-restore-version" class="btn-primary btn-small">Restore this version</button>
                     </div>
-                    <pre id="history-preview-content" class="history-preview-body"></pre>
+                    <div id="history-preview-status" class="history-preview-status hidden" role="status"></div>
+                    <div id="history-preview-content" class="history-preview-body" aria-label="Version preview"></div>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- === Settings Modal === -->
-    <div id="settings-modal" class="modal-overlay hidden">
+    <div id="settings-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Settings</h3>
-                <button id="btn-close-settings" class="btn-icon">&times;</button>
+                <h3 id="settings-title">Settings</h3>
+                <button id="btn-close-settings" class="btn-icon" aria-label="Close">&times;</button>
             </div>
             <div class="settings-form">
+                <div class="settings-group">
+                    <label>Account</label>
+                    <div class="account-row">
+                        <span id="settings-account-email" class="account-email"></span>
+                        <button id="btn-settings-signout" class="btn-secondary btn-small">Sign out</button>
+                    </div>
+                    <p id="settings-account-mode" class="settings-hint"></p>
+                    <button id="btn-settings-credentials" class="btn-link btn-muted settings-link">Change Google Cloud credentials</button>
+                    <p class="settings-hint">Signing out keeps every page saved on this PC.</p>
+                </div>
+                <hr class="divider">
                 <div class="settings-group">
                     <label for="setting-theme">Theme</label>
                     <select id="setting-theme" class="input-select">
@@ -291,6 +318,11 @@
                 <div class="settings-group">
                     <label for="setting-autosave">Auto-save Delay (seconds)</label>
                     <input type="number" id="setting-autosave" class="input-text" min="1" max="30" step="1">
+                </div>
+                <div class="settings-group">
+                    <label for="setting-sync-interval">Refresh from Drive every (seconds)</label>
+                    <input type="number" id="setting-sync-interval" class="input-text" min="0" max="3600" step="30">
+                    <p class="settings-hint">Brings in pages your teammates published. 0 turns automatic refresh off. HexNote also refreshes when you switch back to its window.</p>
                 </div>
                 <hr class="divider">
                 <div class="settings-group">
@@ -306,26 +338,54 @@
     </div>
 
     <!-- Context menu -->
-    <div id="context-menu" class="context-menu hidden">
-        <button data-action="new-page">New Page</button>
-        <button data-action="new-folder">New Folder</button>
+    <div id="context-menu" class="context-menu hidden" role="menu" aria-label="Page actions">
+        <button role="menuitem" data-action="new-page">New Page</button>
+        <button role="menuitem" data-action="new-folder">New Folder</button>
         <hr>
-        <button data-action="rename">Rename</button>
-        <button data-action="delete" class="danger">Delete</button>
+        <button role="menuitem" data-action="rename">Rename <kbd>F2</kbd></button>
+        <button role="menuitem" data-action="move">Move to&hellip;</button>
+        <button role="menuitem" data-action="publish">Publish</button>
+        <button role="menuitem" data-action="delete" class="danger">Delete <kbd>Del</kbd></button>
     </div>
 
     <!-- Workspace context menu -->
-    <div id="ws-context-menu" class="context-menu hidden">
-        <button data-action="ws-open">Open</button>
-        <button data-action="ws-rename">Rename</button>
-        <button data-action="ws-permissions">Permissions</button>
+    <div id="ws-context-menu" class="context-menu hidden" role="menu" aria-label="Workspace actions">
+        <button role="menuitem" data-action="ws-open">Open</button>
+        <button role="menuitem" data-action="ws-drive">Open in Google Drive</button>
+        <button role="menuitem" data-action="ws-rename">Rename</button>
+        <button role="menuitem" data-action="ws-permissions">Permissions</button>
         <hr>
-        <button data-action="ws-delete" class="danger">Delete Workspace</button>
-        <button data-action="ws-new">New Workspace</button>
+        <button role="menuitem" data-action="ws-delete" class="danger">Remove from this PC</button>
+        <button role="menuitem" data-action="ws-new">New Workspace</button>
+    </div>
+
+    <!-- Move to... picker -->
+    <div id="move-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="move-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="move-title">Move to&hellip;</h3>
+                <button id="btn-close-move" class="btn-icon" aria-label="Close">&times;</button>
+            </div>
+            <p id="move-hint" class="settings-hint move-hint"></p>
+            <div id="move-list" class="move-list" role="listbox" aria-labelledby="move-title"></div>
+        </div>
+    </div>
+
+    <!-- In-app confirmation sheet (replaces window.confirm) -->
+    <div id="confirm-sheet" class="modal-overlay confirm-overlay hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+        <div class="modal-content confirm-content">
+            <h3 id="confirm-title"></h3>
+            <p id="confirm-body"></p>
+            <div id="confirm-field" class="confirm-field hidden">
+                <label id="confirm-input-label" for="confirm-input"></label>
+                <input id="confirm-input" type="text" class="input-text" autocomplete="off" spellcheck="false">
+            </div>
+            <div id="confirm-actions" class="confirm-actions"></div>
+        </div>
     </div>
 
     <!-- Toast notifications -->
-    <div id="toast-container" class="toast-container"></div>
+    <div id="toast-container" class="toast-container" role="status" aria-live="polite"></div>
 
     <script src="/vendor/tiptap-bundle.js"></script>
     <script src="/js/mermaid-block.js"></script>

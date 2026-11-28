@@ -17,10 +17,10 @@ import (
 var assets embed.FS
 
 // makeImageMiddleware creates an image-serving middleware that:
-// 1. Serves images from the local cache if available
-// 2. Falls back to downloading from Google Drive if the local file is missing
-//    (happens after publish cleans up local copies)
-// 3. Re-caches the downloaded file for future requests
+//  1. Serves images from the local cache if available
+//  2. Falls back to downloading from Google Drive if the local file is missing
+//     (happens after publish cleans up local copies)
+//  3. Re-caches the downloaded file for future requests
 func makeImageMiddleware(app *App) assetserver.Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -66,10 +66,10 @@ func makeImageMiddleware(app *App) assetserver.Middleware {
 			}
 
 			// Local file missing — try to download from Drive on-demand
-			if app.db != nil && app.driveClient != nil {
+			if client := app.client(); app.db != nil && client != nil {
 				imgAsset, _ := app.db.GetImageAsset(wsID, filename)
 				if imgAsset != nil && imgAsset.DriveFileID != "" {
-					data, dlErr := app.driveClient.DownloadBinaryData(imgAsset.DriveFileID)
+					data, dlErr := client.DownloadBinaryData(imgAsset.DriveFileID)
 					if dlErr == nil && len(data) > 0 {
 						// Re-cache locally for future requests
 						cacheDir := filepath.Join(cacheRoot, wsID)

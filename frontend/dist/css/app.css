@@ -438,6 +438,27 @@ html, body {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-shrink: 0;
+}
+
+/* The title gives way to the status line and buttons in narrow windows. */
+.doc-title {
+    min-width: 120px;
+    text-overflow: ellipsis;
+}
+
+#btn-publish {
+    white-space: nowrap;
+}
+
+/* At the minimum window width, drop the "· ..." half of the status line;
+   the full text stays in its tooltip. */
+@media (max-width: 1040px) {
+    .save-status {
+        max-width: 190px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
 }
 
 .save-status {
@@ -533,7 +554,7 @@ html, body {
     overflow: auto;
 }
 
-#editor .ProseMirror {
+#editor .ProseMirror, .history-preview-body .ProseMirror {
     font-family: var(--font);
     font-size: 15px;
     line-height: 1.7;
@@ -543,7 +564,7 @@ html, body {
     padding: 8px 0;
 }
 
-#editor .ProseMirror > *:first-child { margin-top: 0; }
+#editor .ProseMirror > *:first-child, .history-preview-body .ProseMirror > *:first-child { margin-top: 0; }
 
 /* Placeholder */
 #editor .ProseMirror p.is-editor-empty:first-child::before {
@@ -555,12 +576,12 @@ html, body {
 }
 
 /* Headings */
-#editor .ProseMirror h1 { font-size: 1.8em; margin: 0.8em 0 0.4em; font-weight: 700; }
-#editor .ProseMirror h2 { font-size: 1.5em; margin: 0.7em 0 0.35em; font-weight: 600; }
-#editor .ProseMirror h3 { font-size: 1.25em; margin: 0.6em 0 0.3em; font-weight: 600; }
+#editor .ProseMirror h1, .history-preview-body .ProseMirror h1 { font-size: 1.8em; margin: 0.8em 0 0.4em; font-weight: 700; }
+#editor .ProseMirror h2, .history-preview-body .ProseMirror h2 { font-size: 1.5em; margin: 0.7em 0 0.35em; font-weight: 600; }
+#editor .ProseMirror h3, .history-preview-body .ProseMirror h3 { font-size: 1.25em; margin: 0.6em 0 0.3em; font-weight: 600; }
 
 /* Inline code */
-#editor .ProseMirror code {
+#editor .ProseMirror code, .history-preview-body .ProseMirror code {
     font-family: var(--font-mono);
     background: var(--sidebar-bg);
     padding: 2px 5px;
@@ -569,13 +590,13 @@ html, body {
 }
 
 /* Code blocks */
-#editor .ProseMirror pre {
+#editor .ProseMirror pre, .history-preview-body .ProseMirror pre {
     background: var(--sidebar-bg);
     border-radius: var(--radius);
     padding: 16px;
     overflow-x: auto;
 }
-#editor .ProseMirror pre code {
+#editor .ProseMirror pre code, .history-preview-body .ProseMirror pre code {
     background: none;
     padding: 0;
     font-size: 0.9em;
@@ -622,7 +643,7 @@ html, body {
 }
 
 /* Blockquote */
-#editor .ProseMirror blockquote {
+#editor .ProseMirror blockquote, .history-preview-body .ProseMirror blockquote {
     border-left: 3px solid var(--primary);
     padding-left: 16px;
     margin-left: 0;
@@ -630,63 +651,63 @@ html, body {
 }
 
 /* Tables */
-#editor .ProseMirror table {
+#editor .ProseMirror table, .history-preview-body .ProseMirror table {
     border-collapse: collapse;
     width: 100%;
     margin: 1em 0;
 }
 #editor .ProseMirror th,
-#editor .ProseMirror td {
+#editor .ProseMirror td, .history-preview-body .ProseMirror th, .history-preview-body .ProseMirror td {
     border: 1px solid var(--border);
     padding: 8px 12px;
     text-align: left;
 }
-#editor .ProseMirror th {
+#editor .ProseMirror th, .history-preview-body .ProseMirror th {
     background: var(--sidebar-bg);
     font-weight: 600;
 }
 
 /* Images */
-#editor .ProseMirror img {
+#editor .ProseMirror img, .history-preview-body .ProseMirror img {
     max-width: 100%;
     height: auto;
     border-radius: var(--radius);
 }
-#editor .ProseMirror img.ProseMirror-selectednode {
+#editor .ProseMirror img.ProseMirror-selectednode, .history-preview-body .ProseMirror img.ProseMirror-selectednode {
     outline: 2px solid var(--primary);
     outline-offset: 2px;
 }
 
 /* Lists */
 #editor .ProseMirror ul,
-#editor .ProseMirror ol {
+#editor .ProseMirror ol, .history-preview-body .ProseMirror ul, .history-preview-body .ProseMirror ol {
     padding-left: 24px;
 }
 
 /* Task lists */
-#editor .ProseMirror ul[data-type="taskList"] {
+#editor .ProseMirror ul[data-type="taskList"], .history-preview-body .ProseMirror ul[data-type="taskList"] {
     list-style: none;
     padding-left: 0;
 }
-#editor .ProseMirror ul[data-type="taskList"] li {
+#editor .ProseMirror ul[data-type="taskList"] li, .history-preview-body .ProseMirror ul[data-type="taskList"] li {
     display: flex;
     align-items: flex-start;
     gap: 8px;
 }
-#editor .ProseMirror ul[data-type="taskList"] li > label {
+#editor .ProseMirror ul[data-type="taskList"] li > label, .history-preview-body .ProseMirror ul[data-type="taskList"] li > label {
     flex-shrink: 0;
     margin-top: 3px;
 }
 
 /* Horizontal rule */
-#editor .ProseMirror hr {
+#editor .ProseMirror hr, .history-preview-body .ProseMirror hr {
     border: none;
     border-top: 1px solid var(--border);
     margin: 1.5em 0;
 }
 
 /* Links */
-#editor .ProseMirror a {
+#editor .ProseMirror a, .history-preview-body .ProseMirror a {
     color: var(--primary);
     text-decoration: underline;
 }
@@ -947,6 +968,17 @@ html, body {
 
 .btn-danger:hover {
     background: var(--danger-hover);
+}
+
+/* Icon buttons that are also marked danger (delete page, remove member)
+   keep the icon-button shape. Without this, .btn-danger above wins on
+   source order: its padding collapses the icon to zero width and its red
+   fill turns the button into a solid block. The red appears on hover only
+   (see .btn-icon.btn-danger:hover). */
+.btn-icon.btn-danger {
+    padding: 0;
+    background: transparent;
+    color: var(--text-muted);
 }
 
 .text-muted {
@@ -1732,16 +1764,38 @@ html, body {
 .history-preview-body {
     flex: 1;
     overflow-y: auto;
-    font-size: 13px;
-    font-family: var(--font-mono);
-    line-height: 1.6;
     color: var(--text);
     background: var(--sidebar-bg);
     border-radius: var(--radius);
-    padding: 12px;
-    white-space: pre-wrap;
-    word-break: break-word;
+    padding: 4px 16px;
     margin: 0;
+}
+
+.history-preview-body.hidden {
+    display: none;
+}
+
+/* The preview is a read-only editor: same typography, smaller. */
+.history-preview-body .ProseMirror {
+    font-size: 14px;
+    line-height: 1.6;
+    outline: none;
+    min-height: 0;
+    padding: 12px 0;
+    word-break: break-word;
+}
+
+.history-preview-status {
+    flex: 1;
+    padding: 16px;
+    font-size: 13px;
+    color: var(--text-muted);
+    background: var(--sidebar-bg);
+    border-radius: var(--radius);
+}
+
+.history-preview-status.hidden {
+    display: none;
 }
 
 /* ========================================
@@ -2016,4 +2070,393 @@ html, body {
 
 ::-webkit-scrollbar-thumb:hover {
     background: var(--text-muted);
+}
+
+/* ========================================
+   Notices and account settings
+   ======================================== */
+
+.notice-text {
+    background: #fffbeb;
+    border: 1px solid #fcd34d;
+    color: #92400e;
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.45;
+    margin: 0 0 16px;
+    text-align: left;
+}
+
+[data-theme="dark"] .notice-text,
+.dark-editor .notice-text {
+    background: #3a2e12;
+    border-color: #7c5e10;
+    color: #fcd34d;
+}
+
+.account-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.account-email {
+    font-size: 14px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.settings-link {
+    align-self: flex-start;
+    padding: 0;
+    font-size: 13px;
+}
+
+/* ========================================
+   Confirmation sheet and inline rename
+   ======================================== */
+
+/* Above other modals, so a confirmation opened from one stays on top. */
+.confirm-overlay {
+    z-index: 600;
+}
+
+.confirm-content {
+    max-width: 540px;
+}
+
+.confirm-actions button {
+    padding: 8px 16px;
+    white-space: nowrap;
+}
+
+#confirm-title {
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.35;
+    margin-bottom: 8px;
+}
+
+#confirm-body {
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    margin-bottom: 20px;
+}
+
+#confirm-body:empty {
+    display: none;
+}
+
+.confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.tree-rename-input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--primary);
+    border-radius: 4px;
+    padding: 2px 6px;
+    outline: none;
+}
+
+.ws-rename-input {
+    font-size: 16px;
+    font-weight: 600;
+    padding: 4px 8px;
+    margin-bottom: 4px;
+}
+
+/* Toast with an action button (Retry, Sign in again, ...) */
+.toast {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.toast-text {
+    flex: 1;
+    line-height: 1.4;
+}
+
+.toast-action {
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.toast-action:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* ========================================
+   Page status line and draft hint
+   ======================================== */
+
+.save-status {
+    cursor: default;
+    white-space: nowrap;
+}
+
+.save-status.published {
+    color: #16a34a;
+}
+
+.save-status.published::before {
+    background: #16a34a;
+}
+
+.save-status.draft {
+    color: var(--text-secondary);
+}
+
+.save-status.draft::before {
+    background: var(--text-muted);
+}
+
+.save-status.modified {
+    color: #b45309;
+}
+
+.save-status.modified::before {
+    background: #d97706;
+}
+
+.draft-hint {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 12px 24px 0;
+    padding: 8px 12px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    background: var(--sidebar-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.draft-hint.hidden {
+    display: none;
+}
+
+.draft-hint span {
+    flex: 1;
+}
+
+.draft-hint-dismiss {
+    flex-shrink: 0;
+    font-size: 13px;
+}
+
+/* ========================================
+   Moving pages: drag and drop, Move to...
+   ======================================== */
+
+.tree-item.dragging {
+    opacity: 0.45;
+}
+
+.tree-item.drop-before {
+    box-shadow: inset 0 2px 0 var(--primary);
+}
+
+.tree-item.drop-after {
+    box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+.tree-item.drop-into {
+    background: var(--sidebar-selected);
+    outline: 1px dashed var(--primary);
+    outline-offset: -1px;
+}
+
+.page-tree.drop-root {
+    box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+.move-hint {
+    margin: -4px 0 12px;
+}
+
+.move-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 50vh;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.move-option {
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    padding: 9px 12px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.move-option:last-child {
+    border-bottom: none;
+}
+
+.move-option:hover:not([disabled]),
+.move-option:focus-visible {
+    background: var(--sidebar-hover);
+    outline: none;
+}
+
+.move-option[disabled] {
+    color: var(--text-muted);
+    cursor: default;
+}
+
+/* ========================================
+   Workspace cards: access tag, Open in Drive
+   ======================================== */
+
+.workspace-card-footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 14px;
+    min-height: 22px;
+}
+
+.ws-tag {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    color: var(--text-secondary);
+    background: var(--sidebar-hover);
+}
+
+.ws-tag-owner {
+    color: #1d4ed8;
+    background: #dbeafe;
+}
+
+[data-theme="dark"] .ws-tag-owner,
+.dark-editor .ws-tag-owner {
+    color: #93c5fd;
+    background: #1e3a5f;
+}
+
+.ws-drive-link {
+    font-size: 12px;
+    padding: 0;
+    margin-left: auto;
+}
+
+.sidebar-title-row .btn-open-drive {
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+/* Text field inside the confirmation sheet (askText) */
+.confirm-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 20px;
+}
+
+.confirm-field.hidden {
+    display: none;
+}
+
+.confirm-field label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.toolbar-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.toolbar-btn svg {
+    display: block;
+}
+
+/* ========================================
+   Keyboard focus
+   ======================================== */
+
+/* A visible ring for keyboard focus only (mouse clicks show nothing). */
+:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.tree-item:focus-visible,
+.context-menu button:focus-visible,
+.history-item:focus-visible,
+.folder-item:focus-visible,
+.search-result-item:focus-visible {
+    outline-offset: -2px;
+}
+
+.context-menu button:focus-visible {
+    background: var(--sidebar-hover);
+}
+
+/* Text fields already show focus with their own border. */
+.input-text:focus-visible,
+.input-select:focus-visible,
+#search-input:focus-visible,
+#credentials-json:focus-visible {
+    outline: none;
+}
+
+/* The title field and the page body show a caret, not a ring. */
+.doc-title:focus-visible,
+#editor .ProseMirror:focus-visible,
+.tree-rename-input:focus-visible {
+    outline: none;
+}
+
+.workspace-card:focus-visible {
+    outline-offset: 3px;
+}
+
+.workspace-card:focus-within .ws-menu-btn,
+.ws-menu-btn:focus-visible {
+    opacity: 1;
+}
+
+.context-menu kbd {
+    float: right;
+    margin-left: 16px;
+    font-family: var(--font);
+    font-size: 11px;
+    color: var(--text-muted);
 }

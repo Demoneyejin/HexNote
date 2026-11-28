@@ -28,11 +28,24 @@ HexNote is a **free desktop wiki/knowledge base** that replaces Confluence, Noti
 
 ---
 
+## Signing in
+
+HexNote signs in to Google in one of two ways. Both ask for the same Google Drive access and give you the same features.
+
+- **Sign in with Google** (builds that include HexNote's own Google sign-in): no setup. Sign in, choose or join a workspace folder, write.
+- **Your own Google Cloud credentials** (every build): one person creates a Cloud project once (10 to 15 minutes) and can share its credentials file with teammates. This is the only option in a build without HexNote's sign-in, and stays available in the others through the link under the sign-in button or **Settings > Account**.
+
+Switching between the two asks you to sign in again, because a sign-in belongs to the client that issued it. Your pages and workspaces are kept.
+
+HexNote asks for Google's full Drive permission because a team works in a shared folder: the narrower per-file permission (`drive.file`) cannot see pages a teammate created, even inside a folder shared with you.
+
+The Quick Start below describes setting up your own credentials.
+
 ## Quick Start
 
 HexNote uses a **bring-your-own-key** model — you create free Google Cloud credentials and the app connects directly to your own Google Drive. No middleman, no third-party servers, no one else has access to your data.
 
-The setup takes about 5 minutes and only needs to be done once. It's completely free.
+The setup takes about 10 to 15 minutes the first time and only needs to be done once. It's completely free.
 
 ### Step 1: Create a Google Cloud Project
 
@@ -62,24 +75,30 @@ The setup takes about 5 minutes and only needs to be done once. It's completely 
    - Click **Create**
 5. **Download the JSON** file (click the download icon)
 
-### Step 4: Launch HexNote
+### Step 4: Set the consent screen to In production
+
+Your GCP project starts in **Testing** mode. In Testing, Google **expires every sign-in after 7 days**, so HexNote would ask you to sign in again every week, and only users you list as test users can sign in at all.
+
+1. Go to **APIs & Services** > **OAuth consent screen** (in newer consoles: **Google Auth Platform** > **Audience**)
+2. Under **Publishing status**, click **Publish app** so it reads **In production**
+
+In production without Google verification, the sign-in page shows an "unverified app" warning (click **Advanced** > **Go to ...** to continue, since it is your own project) and the project stays limited to 100 users. The 7-day expiry goes away.
+
+If you prefer to stay in Testing, add everyone who will sign in under **Test users** (up to 100) and expect to sign in again weekly. If a sign-in expires, HexNote tells you and your pages saved on this PC stay safe.
+
+### Step 5: Launch HexNote
 
 1. Download `hexnote.exe` from [Releases](../../releases) (or build from source)
 2. Launch it — you'll see the setup screen
 3. Click **"Show me how"** if you need a reminder of the steps
 4. Paste the contents of your downloaded JSON file
 5. Click **Save & Continue**
-6. Sign in with your Google account
+6. Sign in with your Google account in the browser window that opens
+7. Choose or create a Drive folder for your workspace (or join one that was shared with you)
 
-### Step 5: Add Test Users
+### What HexNote can access
 
-Your GCP project starts in "Testing" mode, which means only users you explicitly add can sign in. To add users:
-
-1. Go to **APIs & Services** > **OAuth consent screen** > **Test users**
-2. Click **+ Add users**
-3. Enter email addresses (up to 100)
-
-To remove this restriction, submit your app for verification (free, takes 2-6 weeks).
+HexNote asks Google for the `drive` scope ("see, edit, create, and delete all of your Google Drive files"). It uses it to list folder names when you pick a workspace, to read and write the pages, subfolders and images inside your workspace folders, to move deleted pages to the Drive trash, to read version history, and to manage who can access a workspace folder when you use Share. It never opens files outside your workspace folders. See the [privacy policy](PRIVACY.md) for details.
 
 ---
 
@@ -87,10 +106,11 @@ To remove this restriction, submit your app for verification (free, takes 2-6 we
 
 1. Open your workspace in HexNote
 2. Click the **Share** button (or right-click workspace > Permissions)
-3. Enter your collaborator's email and role (reader/writer)
+3. Enter your collaborator's email and role (Viewer/Editor)
 4. They get access to the Google Drive folder
-5. They open HexNote > **Join shared workspace** > paste the Drive folder link or search for it
-6. They see all published pages
+5. They set up HexNote. The simplest way is to give them the same OAuth client JSON file you pasted (if your consent screen is still in Testing, add them under **Test users** first)
+6. They open HexNote > **Join a shared workspace** > paste the Drive folder link or search for it
+7. They see all published pages; HexNote refreshes from Drive every couple of minutes and when its window comes back to the front
 
 ---
 
@@ -98,9 +118,11 @@ To remove this restriction, submit your app for verification (free, takes 2-6 we
 
 ```
 You write in HexNote
-    > Saved locally (SQLite + local files)
-    > Click "Publish" > pushed to Google Drive as .md files
-    > Collaborators click "Refresh" > see your published pages
+    > Saved on your PC (SQLite + local image cache)       "Saved on this PC · not published"
+    > Click "Publish" > pushed to Google Drive as .md files "Published · up to date"
+      (images go to an assets/ folder, linked with relative paths)
+    > Collaborators' HexNote refreshes from Drive automatically
+      (and warns before anyone overwrites a newer version)
 
 Your data lives in:
     1. Your machine (local cache - works offline)
@@ -136,23 +158,31 @@ Your data lives in:
 ```bash
 # Clone the repo
 git clone https://github.com/Demoneyejin/HexNote.git
-cd hexnote
-
-# Create your credentials file (see DIY Setup above for getting the values)
-cat > internal/drive/credentials.go << 'EOF'
-package drive
-
-func init() {
-    bundledClientID = "your-client-id.apps.googleusercontent.com"
-    bundledClientSecret = "your-client-secret"
-}
-EOF
+cd HexNote
 
 # Build
 wails build -ldflags "-s -w"
 ```
 
-The binary is at `build/bin/hexnote.exe`.
+The binary is at `build/bin/hexnote.exe`. Built like this it has no sign-in of its own: each user pastes an OAuth client JSON on first launch. No credentials are compiled in.
+
+To build with HexNote's own **Sign in with Google**, use `./build.sh` (or `build.bat` on Windows) with HexNote's OAuth client in a `.env` file that is never committed:
+
+```bash
+HEXNOTE_CLIENT_ID=....apps.googleusercontent.com
+HEXNOTE_CLIENT_SECRET=...
+```
+
+The scripts inject them with `-X hexnote/internal/drive.bundledClientID=...` and `-X hexnote/internal/drive.bundledClientSecret=...`. Without a `.env` they build the bring-your-own-credentials app. A desktop client's secret is not confidential (Google treats installed apps as public clients); the sign-in is protected by PKCE. The bundled client requests the `drive` scope, which Google classes as restricted: until Google has verified the app for it, people signing in see an "unverified app" warning and the project is limited to 100 users.
+
+### Tests
+
+```bash
+go test ./...                                                  # Go: storage, sync, publish, auth (against an in-memory fake Drive)
+NODE_PATH=$(npm root -g) node --test frontend/test/*.test.js   # UI tests (needs Playwright + Chromium)
+```
+
+On Linux without the webview libraries, run the Go tests with `CGO_ENABLED=0`.
 
 ---
 

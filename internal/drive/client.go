@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
+	"time"
 
 	"hexnote/internal/models"
 
@@ -30,6 +32,18 @@ func escapeDriveQuery(s string) string {
 
 func NewClient(ctx context.Context, ts oauth2.TokenSource) (*Client, error) {
 	srv, err := drive.NewService(ctx, option.WithTokenSource(ts))
+	if err != nil {
+		return nil, fmt.Errorf("create drive service: %w", err)
+	}
+	return &Client{service: srv}, nil
+}
+
+// NewClientWithEndpoint builds a client that talks to a different API base
+// path (for example a drivefake server in tests). Requests are authorized
+// through ts, so token-refresh failures surface exactly as in production.
+func NewClientWithEndpoint(ctx context.Context, ts oauth2.TokenSource, endpoint string) (*Client, error) {
+	hc := &http.Client{Transport: &oauth2.Transport{Source: ts, Base: http.DefaultTransport}}
+	srv, err := drive.NewService(ctx, option.WithHTTPClient(hc), option.WithEndpoint(endpoint))
 	if err != nil {
 		return nil, fmt.Errorf("create drive service: %w", err)
 	}
@@ -132,7 +146,9 @@ func (c *Client) ListFiles(folderID string) ([]*drive.File, error) {
 		call := c.service.Files.List().
 			Q(q).
 			Fields("nextPageToken, files(id, name, mimeType, modifiedTime, size)").
-			PageSize(100)
+			PageSize(100).
+			SupportsAllDrives(true).
+			IncludeItemsFromAllDrives(true)
 
 		if pageToken != "" {
 			call = call.PageToken(pageToken)
@@ -168,7 +184,9 @@ func (c *Client) DownloadFile(fileID string) (string, error) {
 	return string(data), nil
 }
 
-func (c *Client) CreateFile(name, folderID, content string) (string, error) {
+// CreateFile uploads a new file and returns its ID and Drive's modifiedTime
+// for it (Drive's clock, so later conflict checks compare like with like).
+func (c *Client) CreateFile(name, folderID, content string) (string, time.Time, error) {
 	f := &drive.File{
 		Name:    name,
 		Parents: []string{folderID},
@@ -176,56 +194,119 @@ func (c *Client) CreateFile(name, folderID, content string) (string, error) {
 
 	created, err := c.service.Files.Create(f).
 		Media(strings.NewReader(content)).
-		Fields("id").
+		Fields("id, modifiedTime").
 		SupportsAllDrives(true).
 		Do()
 	if err != nil {
-		return "", fmt.Errorf("create file: %w", err)
+		return "", time.Time{}, fmt.Errorf("create file: %w", err)
 	}
 
-	return created.Id, nil
+	return created.Id, parseTimeOrNow(created.ModifiedTime), nil
 }
 
-func (c *Client) UpdateFile(fileID, name, content string) error {
+// UpdateFile replaces a file's name and content and returns Drive's new
+// modifiedTime for it.
+func (c *Client) UpdateFile(fileID, name, content string) (time.Time, error) {
 	f := &drive.File{
 		Name: name,
 	}
 
-	_, err := c.service.Files.Update(fileID, f).
+	updated, err := c.service.Files.Update(fileID, f).
 		Media(strings.NewReader(content)).
+		Fields("id, modifiedTime").
 		SupportsAllDrives(true).
 		Do()
 	if err != nil {
-		return fmt.Errorf("update file: %w", err)
+		return time.Time{}, fmt.Errorf("update file: %w", err)
 	}
 
+	return parseTimeOrNow(updated.ModifiedTime), nil
+}
+
+// FileInfo is the metadata used to detect conflicting edits before publishing.
+type FileInfo struct {
+	Name         string
+	ModifiedTime time.Time
+	ModifiedBy   string // display name of the last person to change the file
+	Trashed      bool
+	Parents      []string
+}
+
+// GetFileInfo returns a file's current name, modifiedTime, last modifying
+// user and trash state.
+func (c *Client) GetFileInfo(fileID string) (*FileInfo, error) {
+	f, err := c.service.Files.Get(fileID).
+		Fields("name, modifiedTime, trashed, parents, lastModifyingUser(displayName, emailAddress)").
+		SupportsAllDrives(true).
+		Do()
+	if err != nil {
+		return nil, fmt.Errorf("get file metadata: %w", err)
+	}
+	info := &FileInfo{Name: f.Name, Trashed: f.Trashed, Parents: f.Parents}
+	if t, err := ParseTime(f.ModifiedTime); err == nil {
+		info.ModifiedTime = t
+	}
+	if f.LastModifyingUser != nil {
+		info.ModifiedBy = f.LastModifyingUser.DisplayName
+		if info.ModifiedBy == "" {
+			info.ModifiedBy = f.LastModifyingUser.EmailAddress
+		}
+	}
+	return info, nil
+}
+
+func parseTimeOrNow(s string) time.Time {
+	if t, err := ParseTime(s); err == nil {
+		return t
+	}
+	return time.Now().UTC()
+}
+
+// RenameFile changes a file's or folder's name on Drive.
+func (c *Client) RenameFile(fileID, name string) error {
+	_, err := c.service.Files.Update(fileID, &drive.File{Name: name}).
+		Fields("id").
+		SupportsAllDrives(true).
+		Do()
+	if err != nil {
+		return fmt.Errorf("rename file: %w", err)
+	}
 	return nil
 }
 
-// TrashFile moves a file or folder to the Drive trash (recoverable for 30 days).
-// Trashing a folder also trashes everything inside it. ListFiles filters out
-// trashed items, so sync will not re-create a trashed page locally.
+// MoveFile moves a file or folder into newParentID, removing it from the
+// given current parents.
+func (c *Client) MoveFile(fileID, newParentID string, oldParents []string) error {
+	call := c.service.Files.Update(fileID, &drive.File{}).
+		AddParents(newParentID).
+		Fields("id, parents").
+		SupportsAllDrives(true)
+	remove := make([]string, 0, len(oldParents))
+	for _, p := range oldParents {
+		if p != newParentID {
+			remove = append(remove, p)
+		}
+	}
+	if len(remove) > 0 {
+		call = call.RemoveParents(strings.Join(remove, ","))
+	}
+	if _, err := call.Do(); err != nil {
+		return fmt.Errorf("move file: %w", err)
+	}
+	return nil
+}
+
+// TrashFile moves a file (or folder, with its contents) to the Drive trash.
+// The owner can restore it from drive.google.com for 30 days.
 func (c *Client) TrashFile(fileID string) error {
 	_, err := c.service.Files.Update(fileID, &drive.File{Trashed: true}).
+		Fields("id").
 		SupportsAllDrives(true).
 		Do()
 	if err != nil {
-		return fmt.Errorf("move to Drive trash: %w", err)
+		return fmt.Errorf("trash file: %w", err)
 	}
 	return nil
-}
-
-// GetFileModifiedTime returns the current modifiedTime of a file on Drive.
-// Used before pushing to check if someone else modified the file since our last sync.
-func (c *Client) GetFileModifiedTime(fileID string) (string, error) {
-	f, err := c.service.Files.Get(fileID).
-		Fields("modifiedTime").
-		SupportsAllDrives(true).
-		Do()
-	if err != nil {
-		return "", fmt.Errorf("get file metadata: %w", err)
-	}
-	return f.ModifiedTime, nil
 }
 
 // Revisions / version history
@@ -405,7 +486,7 @@ func (c *Client) GetFolderByID(folderID string) (*models.DriveFolder, error) {
 		return nil, fmt.Errorf("get folder: %w", err)
 	}
 	if f.MimeType != "application/vnd.google-apps.folder" {
-		return nil, fmt.Errorf("the linked item is not a folder")
+		return nil, fmt.Errorf("ERR_INVALID: The link points to a file, not a folder.")
 	}
 	return &models.DriveFolder{
 		ID:   f.Id,

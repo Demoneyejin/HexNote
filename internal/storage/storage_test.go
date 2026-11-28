@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -270,8 +271,8 @@ func TestSettingsRoundTrip(t *testing.T) {
 	if s.Theme != "system" {
 		t.Errorf("default Theme = %q, want %q", s.Theme, "system")
 	}
-	if s.SyncIntervalSecs != 60 {
-		t.Errorf("default SyncIntervalSecs = %d, want 60", s.SyncIntervalSecs)
+	if s.SyncIntervalSecs != 120 {
+		t.Errorf("default SyncIntervalSecs = %d, want 120", s.SyncIntervalSecs)
 	}
 	if s.AutoSaveDelaySecs != 2 {
 		t.Errorf("default AutoSaveDelaySecs = %d, want 2", s.AutoSaveDelaySecs)
@@ -424,5 +425,53 @@ func TestImageAssetRoundTrip(t *testing.T) {
 	}
 	if len(unsynced) != 0 {
 		t.Errorf("expected 0 unsynced after setting drive ID, got %d", len(unsynced))
+	}
+}
+
+// Before auto-refresh existed the Settings modal stored syncIntervalSecs=0
+// on every save. That legacy 0 must not disable the new auto-refresh.
+func TestLegacySyncIntervalIgnored(t *testing.T) {
+	db := newTestDB(t)
+	db.db.Exec("INSERT INTO settings (key, value) VALUES ('syncIntervalSecs', '0')")
+
+	s, _ := db.GetSettings()
+	if s.SyncIntervalSecs != 120 {
+		t.Errorf("legacy 0 should fall back to the default 120, got %d", s.SyncIntervalSecs)
+	}
+
+	s.SyncIntervalSecs = 0 // a real choice made in the new Settings field
+	if err := db.UpdateSettings(s); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = db.GetSettings()
+	if s.SyncIntervalSecs != 0 {
+		t.Errorf("explicit 0 should be kept, got %d", s.SyncIntervalSecs)
+	}
+}
+
+func TestPlaceDocumentAndIsDescendant(t *testing.T) {
+	db := newTestDB(t)
+	f, _ := db.CreateDocument("F", "", "ws-1", true)
+	a, _ := db.CreateDocument("A", f.ID, "ws-1", false)
+	b, _ := db.CreateDocument("B", f.ID, "ws-1", false)
+	c, _ := db.CreateDocument("C", "", "ws-1", false)
+	other, _ := db.CreateDocument("Other ws", f.ID, "ws-2", false)
+
+	if err := db.PlaceDocument(c.ID, f.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	tree, _ := db.GetDocumentTree("ws-1")
+	var got []string
+	for _, n := range tree[0].Children {
+		got = append(got, n.Document.Title)
+	}
+	if strings.Join(got, ",") != "A,C,B" {
+		t.Errorf("children = %v, want A,C,B", got)
+	}
+	if d, _ := db.GetDocument(other.ID); d.SortOrder != 0 {
+		t.Errorf("other workspace's sort order touched: %d", d.SortOrder)
+	}
+	if !db.IsDescendant(a.ID, f.ID) || !db.IsDescendant(f.ID, f.ID) || db.IsDescendant(f.ID, a.ID) {
+		t.Error("IsDescendant wrong")
 	}
 }

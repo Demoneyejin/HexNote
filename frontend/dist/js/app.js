@@ -14,8 +14,16 @@
     var activeWorkspace = null;
     var autoSaveDelay = 2000;
     var selectedRevisionId = null;
-    var lastKnownContent = '';  // tracks the last content loaded/saved to DB — prevents auto-save from re-dirtying unchanged docs
-    var lastKnownTitle = '';    // same, for the title — a title-only edit must still count as a change
+    var refreshToolbar = function () {}; // set by buildEditorToolbar
+    var lastKnownContent = '';  // serializer output for the last content loaded/saved — prevents auto-save from re-dirtying unchanged docs
+    var lastKnownTitle = '';    // title as last loaded/saved — a title-only edit must still reach the backend
+    var currentDocMeta = null;  // { status, driveFileId } of the open page, for the status line
+    var saveState = 'saved';    // 'saved' | 'unsaved' | 'saving' | 'error'
+    var draftHintDismissed = true; // loaded from UI state at startup
+    var syncIntervalSecs = 120;  // auto-refresh period; 0 = off
+    var refreshTimer = null;
+    var lastRefreshAt = 0;
+    var refreshInFlight = null;  // promise of the running refresh, if any
 
     // === View Management ===
     var ALL_VIEWS = ['view-credentials', 'view-signin', 'view-path-choice', 'view-workspaces', 'view-onboarding', 'view-join', 'view-editor'];
@@ -37,19 +45,222 @@
     }
 
     // === Toast Notification System ===
-    function showToast(message, type, durationMs) {
+    // showToast shows a transient message. action, if given, adds a button:
+    // { label: 'Retry', run: function () { ... } }.
+    function showToast(message, type, durationMs, action) {
         type = type || 'info';
-        durationMs = durationMs || 4000;
+        durationMs = durationMs || (action ? 8000 : 4000);
         var container = document.getElementById('toast-container');
         var toast = document.createElement('div');
         toast.className = 'toast toast-' + type;
-        toast.textContent = message;
-        container.appendChild(toast);
-        requestAnimationFrame(function () { toast.classList.add('toast-visible'); });
-        setTimeout(function () {
+        var text = document.createElement('span');
+        text.className = 'toast-text';
+        text.textContent = message;
+        toast.appendChild(text);
+        function dismiss() {
             toast.classList.remove('toast-visible');
             toast.addEventListener('transitionend', function () { toast.remove(); });
-        }, durationMs);
+            setTimeout(function () { toast.remove(); }, 400);
+        }
+        if (action) {
+            var btn = document.createElement('button');
+            btn.className = 'toast-action';
+            btn.textContent = action.label;
+            btn.addEventListener('click', function () { dismiss(); action.run(); });
+            toast.appendChild(btn);
+        }
+        container.appendChild(toast);
+        requestAnimationFrame(function () { toast.classList.add('toast-visible'); });
+        setTimeout(dismiss, durationMs);
+    }
+
+    // === Errors ===
+    // The Go side prefixes errors with a stable code (see the Errors section
+    // in app.go). describeError turns one into a sentence and, where it
+    // helps, an action. The raw detail goes to the console.
+    function errorMessage(e) {
+        return (e && e.message) || String(e == null ? '' : e);
+    }
+
+    function errorCode(e) {
+        var m = /^(ERR_[A-Z]+):/.exec(errorMessage(e));
+        return m ? m[1] : null;
+    }
+
+    // what: short verb phrase for the failed action ("publish", "refresh").
+    // retry: optional function offered as a Retry action when offline.
+    function describeError(e, what, retry) {
+        var code = errorCode(e);
+        var lead = what ? 'Couldn\u2019t ' + what + '. ' : '';
+        switch (code) {
+            case 'ERR_OFFLINE':
+                return {
+                    code: code,
+                    text: lead + 'Google Drive can\u2019t be reached. Check your connection; your work is saved on this PC.',
+                    action: retry ? { label: 'Retry', run: retry } : null,
+                };
+            case 'ERR_AUTH':
+                return {
+                    code: code,
+                    text: lead + 'Your Google sign-in expired.',
+                    action: { label: 'Sign in again', run: async function () { await leaveEditor(); showSigninView(''); } },
+                };
+            case 'ERR_FORBIDDEN':
+                return {
+                    code: code,
+                    text: lead + 'You don\u2019t have permission to change this on Google Drive. Ask the folder owner for edit access.',
+                    action: activeWorkspace && activeWorkspace.driveFolderUrl
+                        ? { label: 'Open folder in Drive', run: openWorkspaceInDrive }
+                        : null,
+                };
+            case 'ERR_NOTFOUND':
+                return {
+                    code: code,
+                    text: lead + 'It no longer exists on Google Drive, or it isn\u2019t shared with you.',
+                    action: currentView() === 'view-editor' ? { label: 'Refresh', run: function () { triggerSync(); } } : null,
+                };
+            case 'ERR_CONFLICT':
+                return { code: code, text: lead + 'Someone else changed this page on Drive.', action: null };
+            case 'ERR_INVALID':
+                return { code: code, text: errorMessage(e).replace(/^ERR_INVALID:\s*/, ''), action: null };
+        }
+        return { code: null, text: lead + 'Something went wrong. Try again in a moment.', action: retry ? { label: 'Retry', run: retry } : null };
+    }
+
+    // showError reports a failed action in a toast.
+    function showError(what, e, retry) {
+        console.error('[' + (what || 'error') + ']', errorMessage(e));
+        var d = describeError(e, what, retry);
+        // An expired sign-in already switched to the sign-in view.
+        if (d.code === 'ERR_AUTH' && currentView() === 'view-signin') return;
+        showToast(d.text, d.code === 'ERR_OFFLINE' ? 'warning' : 'error', null, d.action);
+    }
+
+    function currentView() {
+        for (var i = 0; i < ALL_VIEWS.length; i++) {
+            var el = document.getElementById(ALL_VIEWS[i]);
+            if (el && !el.classList.contains('hidden')) return ALL_VIEWS[i];
+        }
+        return null;
+    }
+
+    function openWorkspaceInDrive() {
+        if (activeWorkspace && activeWorkspace.driveFolderUrl && window.runtime) {
+            window.runtime.BrowserOpenURL(activeWorkspace.driveFolderUrl);
+        }
+    }
+
+    // === Keyboard shortcuts ===
+    var isMac = /Mac|iPhone|iPad/.test(navigator.platform || '');
+
+    // shortcutLabel turns 'Mod+Shift+P' into 'Ctrl+Shift+P' (or ⌘⇧P on a Mac).
+    function shortcutLabel(keys) {
+        if (!isMac) return keys.replace('Mod', 'Ctrl');
+        return keys.replace('Mod+', '\u2318').replace('Shift+', '\u21E7').replace('Alt+', '\u2325');
+    }
+
+    // === Confirmation sheet ===
+    // askChoice shows an in-app sheet and resolves with the chosen value, or
+    // null when dismissed (Esc, Cancel, or a click on the backdrop).
+    //   opts.title, opts.body: text (never HTML)
+    //   opts.choices: [{ label, value, kind: 'danger'|'primary'|'secondary', id }]
+    //   opts.cancelLabel: label of the Cancel button (default 'Cancel')
+    // The Cancel button is focused first, so Enter never confirms a destructive
+    // action by accident.
+    var sheetResolve = null;
+
+    function askChoice(opts) {
+        var sheet = document.getElementById('confirm-sheet');
+        var actions = document.getElementById('confirm-actions');
+        if (sheetResolve) closeSheet(null);
+        document.getElementById('confirm-title').textContent = opts.title || '';
+        document.getElementById('confirm-body').textContent = opts.body || '';
+        actions.innerHTML = '';
+
+        // Optional single-line text field (askText).
+        var field = document.getElementById('confirm-field');
+        var input = document.getElementById('confirm-input');
+        field.classList.toggle('hidden', !opts.input);
+        if (opts.input) {
+            document.getElementById('confirm-input-label').textContent = opts.input.label || '';
+            input.value = opts.input.value || '';
+            input.placeholder = opts.input.placeholder || '';
+        }
+
+        var cancel = document.createElement('button');
+        cancel.id = 'confirm-cancel';
+        cancel.className = 'btn-secondary';
+        cancel.textContent = opts.cancelLabel || 'Cancel';
+        cancel.addEventListener('click', function () { closeSheet(null); });
+        actions.appendChild(cancel);
+
+        (opts.choices || []).forEach(function (c) {
+            var b = document.createElement('button');
+            if (c.id) b.id = c.id;
+            b.className = c.kind === 'danger' ? 'btn-danger' : (c.kind === 'secondary' ? 'btn-secondary' : 'btn-primary');
+            b.textContent = c.label;
+            b.dataset.value = c.value;
+            b.addEventListener('click', function () { closeSheet(c.value); });
+            actions.appendChild(b);
+        });
+
+        sheetReturnFocus = document.activeElement;
+        sheet.classList.remove('hidden');
+        if (opts.input) { input.focus(); input.select(); } else cancel.focus();
+        return new Promise(function (resolve) { sheetResolve = resolve; });
+    }
+
+    var sheetReturnFocus = null;
+
+    function closeSheet(value) {
+        document.getElementById('confirm-sheet').classList.add('hidden');
+        var resolve = sheetResolve;
+        sheetResolve = null;
+        if (sheetReturnFocus && sheetReturnFocus.focus && document.body.contains(sheetReturnFocus)) {
+            try { sheetReturnFocus.focus(); } catch (e) { /* ignore */ }
+        }
+        sheetReturnFocus = null;
+        if (resolve) resolve(value);
+    }
+
+    // askConfirm is a yes/no sheet: resolves true only when confirmed.
+    async function askConfirm(title, body, confirmLabel, danger) {
+        var v = await askChoice({
+            title: title,
+            body: body,
+            choices: [{ id: 'confirm-ok', label: confirmLabel || 'OK', value: 'ok', kind: danger ? 'danger' : 'primary' }],
+        });
+        return v === 'ok';
+    }
+
+    // askText shows the sheet with a text field. Resolves with
+    // { choice, text } or null when dismissed. Enter in the field picks
+    // the first 'primary' choice.
+    async function askText(opts) {
+        var choice = await askChoice(Object.assign({}, opts, { input: { label: opts.label, value: opts.value, placeholder: opts.placeholder } }));
+        if (choice === null) return null;
+        return { choice: choice, text: document.getElementById('confirm-input').value };
+    }
+
+    function bindSheetEvents() {
+        var sheet = document.getElementById('confirm-sheet');
+        document.getElementById('confirm-input').addEventListener('keydown', function (e) {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            var primary = document.querySelector('#confirm-actions .btn-primary');
+            if (primary) primary.click();
+        });
+        sheet.addEventListener('mousedown', function (e) {
+            if (e.target === sheet) closeSheet(null);
+        });
+        // Capture phase so Esc closes the sheet before anything else sees it.
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape' && sheetResolve) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                closeSheet(null);
+            }
+        }, true);
     }
 
     // === Theme ===
@@ -118,8 +329,16 @@
                 if (settings.autoSaveDelaySecs > 0) {
                     autoSaveDelay = settings.autoSaveDelaySecs * 1000;
                 }
+                if (typeof settings.syncIntervalSecs === 'number') syncIntervalSecs = settings.syncIntervalSecs;
             }
         } catch (e) { /* ignore — settings not critical for boot */ }
+        scheduleAutoRefresh();
+        // Coming back to the window is when a teammate's changes matter most.
+        window.addEventListener('focus', function () { autoRefresh('focus'); });
+
+        try {
+            draftHintDismissed = (await window.go.main.App.GetUIState('draft-hint-dismissed')) === '1';
+        } catch (e) { draftHintDismissed = false; }
 
         updateEditorDarkMode();
         await routeToCorrectView();
@@ -128,18 +347,21 @@
     async function routeToCorrectView() {
         try {
             var status = await window.go.main.App.GetAuthStatus();
+            authStatus = status;
+            applyModeCopy();
 
             if (!status.hasCredentials) {
-                showView('view-credentials');
+                showCredentialsView(false);
                 return;
             }
             if (!status.isSignedIn) {
-                showView('view-signin');
+                showSigninView(status.sessionExpired ? SESSION_EXPIRED_TEXT : '');
                 return;
             }
 
             // Signed in — show user email everywhere
             var email = status.userEmail || '';
+            document.getElementById('settings-account-email').textContent = email || 'Signed in';
             document.getElementById('user-email-display').textContent = email;
             document.querySelectorAll('.user-badge').forEach(function (el) {
                 el.textContent = email;
@@ -174,17 +396,93 @@
             }
             try {
                 await window.go.main.App.ImportCredentials(json);
-                showView('view-signin');
+                document.getElementById('credentials-json').value = '';
+                // Same client as before keeps the sign-in; a new one needs a sign-in.
+                await routeToCorrectView();
             } catch (e) {
-                errEl.textContent = 'Error: ' + (e.message || e);
+                errEl.textContent = describeError(e).text;
                 errEl.classList.remove('hidden');
             }
         });
+
+        document.getElementById('btn-credentials-back').addEventListener('click', routeToCorrectView);
+        document.getElementById('btn-use-bundled-from-creds').addEventListener('click', switchToBuiltIn);
 
         document.getElementById('link-gcp').addEventListener('click', function (e) {
             e.preventDefault();
             if (window.runtime) window.runtime.BrowserOpenURL('https://console.cloud.google.com/apis/credentials');
         });
+    }
+
+    var SESSION_EXPIRED_TEXT = 'Your Google sign-in expired. Sign in again to continue. Pages saved on this PC are safe.';
+    var authStatus = null;
+
+    // showCredentialsView opens the paste-your-credentials screen. canGoBack
+    // shows a Back link when credentials already exist (changing them).
+    function showCredentialsView(canGoBack) {
+        var bundled = !!(authStatus && authStatus.bundledAvailable);
+        document.getElementById('credentials-error').classList.add('hidden');
+        document.getElementById('btn-credentials-back').classList.toggle('hidden', !canGoBack);
+        // With a built-in sign-in available, this screen is the optional
+        // bring-your-own-credentials path.
+        document.getElementById('credentials-heading').textContent = bundled ? 'Use your own Google Cloud credentials' : 'Welcome! One-time Setup';
+        document.getElementById('credentials-intro').classList.toggle('hidden', bundled);
+        document.getElementById('credentials-own-intro').classList.toggle('hidden', !bundled);
+        document.getElementById('btn-use-bundled-from-creds').classList.toggle('hidden', !bundled || usesBuiltInSignIn());
+        showView('view-credentials');
+    }
+
+    // usesBuiltInSignIn: signed in (or about to) through HexNote's own Google
+    // client rather than credentials the user pasted. Both get the same
+    // Drive access; only the wording and the switch links differ.
+    function usesBuiltInSignIn() {
+        return !!(authStatus && authStatus.mode === 'builtin');
+    }
+
+    // applyModeCopy adjusts the wording that depends on which sign-in is used.
+    function applyModeCopy() {
+        var builtIn = usesBuiltInSignIn();
+        var bundled = !!(authStatus && authStatus.bundledAvailable);
+        document.getElementById('signin-heading').textContent = builtIn ? 'Sign in with Google' : 'Sign in to Google';
+        document.getElementById('signin-desc').textContent = builtIn
+            ? 'HexNote keeps your pages in a Google Drive folder you choose, so your team can work in it together. A browser window will open for you to sign in.'
+            : 'Click below to authenticate with your Google account. A browser window will open.';
+        document.getElementById('btn-custom-credentials').textContent = builtIn ? 'Use your own Google Cloud credentials instead' : 'Change Google Cloud credentials';
+        document.getElementById('btn-use-bundled').classList.toggle('hidden', builtIn || !bundled);
+        document.getElementById('settings-account-mode').textContent = builtIn
+            ? 'Signed in with HexNote\u2019s Google sign-in.'
+            : (authStatus && authStatus.mode === 'own-key' ? 'Signed in through your own Google Cloud project.' : '');
+        document.getElementById('btn-settings-credentials').textContent = builtIn ? 'Use your own Google Cloud credentials' : 'Change Google Cloud credentials';
+    }
+
+    async function switchToBuiltIn() {
+        try {
+            await window.go.main.App.UseBundledCredentials();
+            await routeToCorrectView();
+        } catch (e) {
+            showError('switch to HexNote\u2019s sign-in', e);
+        }
+    }
+
+    // showSigninView opens the sign-in screen, optionally with a notice
+    // explaining why (for example an expired sign-in).
+    function showSigninView(notice) {
+        var noticeEl = document.getElementById('signin-notice');
+        noticeEl.textContent = notice || '';
+        noticeEl.classList.toggle('hidden', !notice);
+        document.getElementById('signin-waiting').classList.add('hidden');
+        document.getElementById('signin-error').classList.add('hidden');
+        showView('view-signin');
+    }
+
+    // leaveEditor saves the open page and closes it and any modal, before
+    // switching to a screen outside the workspace (sign-in, credentials).
+    async function leaveEditor() {
+        if (currentDocId) {
+            try { await saveNow(); } catch (e) { /* saving is local; keep going */ }
+        }
+        currentDocId = null;
+        document.querySelectorAll('.modal-overlay').forEach(function (m) { m.classList.add('hidden'); });
     }
 
     // === Sign In View ===
@@ -198,22 +496,30 @@
             try {
                 await window.go.main.App.StartOAuthFlow();
             } catch (e) {
-                errEl.textContent = 'Error: ' + (e.message || e);
+                errEl.textContent = describeError(e, 'start the sign-in').text;
                 errEl.classList.remove('hidden');
                 waitEl.classList.add('hidden');
             }
         });
 
-        // Advanced: let power users provide their own OAuth credentials
+        // Optional: use your own Google Cloud OAuth client
         document.getElementById('btn-custom-credentials').addEventListener('click', function () {
-            showView('view-credentials');
+            showCredentialsView(true);
         });
+        document.getElementById('btn-use-bundled').addEventListener('click', switchToBuiltIn);
 
         // Listen for auth completion from Wails event
         if (window.runtime) {
             window.runtime.EventsOn('auth:complete', async function () {
                 await window.go.main.App.OnAuthComplete();
                 await routeToCorrectView();
+            });
+            // Google rejected the saved sign-in (revoked, or expired after 7 days
+            // while the consent screen is in Testing). Keep local work, then ask
+            // the user to sign in again.
+            window.runtime.EventsOn('auth:expired', async function () {
+                await leaveEditor();
+                showSigninView(SESSION_EXPIRED_TEXT);
             });
             window.runtime.EventsOn('auth:error', function (msg) {
                 var errEl = document.getElementById('signin-error');
@@ -228,11 +534,52 @@
             window.runtime.EventsOn('settings:changed', function (s) {
                 if (s && s.theme) applyTheme(s.theme);
                 if (s && s.autoSaveDelaySecs > 0) autoSaveDelay = s.autoSaveDelaySecs * 1000;
+                if (s && typeof s.syncIntervalSecs === 'number') { syncIntervalSecs = s.syncIntervalSecs; scheduleAutoRefresh(); }
             });
 
             // Refresh tree when sync pulls new published pages
-            window.runtime.EventsOn('sync:docs-updated', function () {
-                loadTree();
+            // The open page is reloaded only when it has no local edits: a draft
+            // is never overwritten (the backend does not touch drafts either).
+            window.runtime.EventsOn('sync:docs-updated', async function (ids) {
+                var openChanged = currentDocId && (ids || []).indexOf(currentDocId) >= 0;
+                if (openChanged && !isOpenPageClean() && window.__hexnoteHasUnsaved) {
+                    // A teammate's version arrived under unsaved typing. Keep the
+                    // typing, and remember which version it was based on so
+                    // Publish asks before replacing theirs.
+                    var id = currentDocId;
+                    var base = currentDocMeta && currentDocMeta.driveModifiedAt;
+                    await saveNow();
+                    if (base) {
+                        try { await window.go.main.App.KeepEditBase(id, base); } catch (e) { console.error('KeepEditBase:', errorMessage(e)); }
+                    }
+                    showToast('A teammate published a newer version of this page while you were typing. Your text is kept; Publish will let you choose which version to keep.', 'warning', 9000);
+                    await loadTree();
+                    return;
+                }
+                await loadTree();
+                if (openChanged && isOpenPageClean()) {
+                    await reloadCurrentDoc();
+                }
+            });
+
+            // A teammate deleted pages on Drive: they are gone here too, except
+            // pages with unpublished local edits, which were kept as drafts.
+            window.runtime.EventsOn('sync:docs-removed', async function (data) {
+                var removed = (data && data.removed) || [];
+                var detached = (data && data.detached) || [];
+                if (currentDocId && removed.indexOf(currentDocId) >= 0) {
+                    currentDocId = null;
+                    window.__hexnoteHasUnsaved = false;
+                    document.getElementById('editor-container').classList.add('hidden');
+                }
+                await loadTree();
+                updateEmptyState();
+                if (removed.length) {
+                    showToast(removed.length === 1 ? 'A page was deleted by a teammate.' : removed.length + ' pages were deleted by a teammate.', 'info');
+                }
+                if (detached.length) {
+                    showToast((detached.length === 1 ? 'A page you edited was' : detached.length + ' pages you edited were') + ' deleted on Drive. Your edits are kept here as drafts.', 'warning', 8000);
+                }
             });
         }
     }
@@ -250,16 +597,37 @@
         }
 
         noWs.classList.add('hidden');
+        knownWorkspaces = workspaces;
         grid.innerHTML = workspaces.map(function (ws) {
-            var synced = ws.lastSyncedAt ? 'Last synced: ' + new Date(ws.lastSyncedAt).toLocaleString() : 'Never synced';
-            return '<div class="workspace-card" data-id="' + ws.id + '" data-name="' + escapeHtml(ws.name) + '">' +
+            var synced = ws.lastSyncedAt ? 'Refreshed from Drive ' + new Date(ws.lastSyncedAt).toLocaleString() : 'Not refreshed yet';
+            var tag = '';
+            if (ws.access === 'owner') tag = '<span class="ws-tag ws-tag-owner" title="You own this Google Drive folder">Owner</span>';
+            else if (ws.access === 'writer') tag = '<span class="ws-tag" title="Shared with you; you can edit">Shared \u00b7 Editor</span>';
+            else if (ws.access === 'reader' || ws.access === 'commenter') tag = '<span class="ws-tag" title="Shared with you; you can view">Shared \u00b7 Viewer</span>';
+            return '<div class="workspace-card" tabindex="0" role="button" data-id="' + escapeHtml(ws.id) + '" data-name="' + escapeHtml(ws.name) + '" aria-label="Open workspace ' + escapeHtml(ws.name) + '">' +
                 '<div class="workspace-card-body">' +
                 '<h3>' + escapeHtml(ws.name) + '</h3>' +
                 '<p class="workspace-meta">' + synced + '</p>' +
                 '</div>' +
-                '<button class="ws-menu-btn" data-id="' + ws.id + '" data-name="' + escapeHtml(ws.name) + '" title="Options">\u22EE</button>' +
+                '<div class="workspace-card-footer">' + tag +
+                (ws.driveFolderUrl ? '<button class="ws-drive-link btn-link" data-url="' + escapeHtml(ws.driveFolderUrl) + '">Open in Drive</button>' : '') +
+                '</div>' +
+                '<button class="ws-menu-btn" data-id="' + escapeHtml(ws.id) + '" data-name="' + escapeHtml(ws.name) + '" title="Options" aria-label="Options for ' + escapeHtml(ws.name) + '">\u22EE</button>' +
                 '</div>';
         }).join('');
+
+        grid.querySelectorAll('.ws-drive-link').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                if (window.runtime) window.runtime.BrowserOpenURL(btn.dataset.url);
+            });
+        });
+        grid.querySelectorAll('.workspace-card').forEach(function (card) {
+            card.addEventListener('keydown', function (e) {
+                if (e.target !== card) return;
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openWorkspace(card.dataset.id); }
+            });
+        });
 
         // Click card body → open workspace
         grid.querySelectorAll('.workspace-card').forEach(function (card) {
@@ -295,6 +663,41 @@
         });
     }
 
+    // startWorkspaceRename edits a workspace card's name in place.
+    function startWorkspaceRename(wsId) {
+        var card = document.querySelector('.workspace-card[data-id="' + cssEscape(wsId) + '"]');
+        if (!card) return;
+        var h3 = card.querySelector('h3');
+        var oldName = card.dataset.name;
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'input-text ws-rename-input';
+        input.value = oldName;
+        input.setAttribute('aria-label', 'Workspace name');
+        h3.replaceWith(input);
+        input.focus();
+        input.select();
+
+        var done = false;
+        async function finish(commit) {
+            if (done) return;
+            done = true;
+            var name = input.value.trim();
+            if (commit && name && name !== oldName) {
+                try { await window.go.main.App.RenameWorkspace(wsId, name); } catch (e) { showError('rename the workspace', e); }
+            }
+            showWorkspacesView(await window.go.main.App.GetWorkspaces());
+        }
+        input.addEventListener('keydown', function (e) {
+            e.stopPropagation();
+            if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+            else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        });
+        input.addEventListener('blur', function () { finish(true); });
+        input.addEventListener('click', function (e) { e.stopPropagation(); });
+    }
+
+    var knownWorkspaces = [];
     var wsContextTargetId = null;
     var wsContextTargetName = null;
 
@@ -302,40 +705,59 @@
         wsContextTargetId = wsId;
         wsContextTargetName = wsName;
         var menu = document.getElementById('ws-context-menu');
+        // A keyboard "click" on the ⋮ button has no pointer position.
+        var fromKeyboard = e.detail === 0 && e.currentTarget && e.currentTarget.getBoundingClientRect;
+        if (fromKeyboard) e = anchorEvent(e.currentTarget);
+        menuReturnFocus = fromKeyboard ? document.activeElement : null;
         menu.style.top = e.clientY + 'px';
         menu.style.left = e.clientX + 'px';
         menu.classList.remove('hidden');
 
         var isCard = !!wsId;
         menu.querySelector('[data-action="ws-open"]').style.display = isCard ? '' : 'none';
+        menu.querySelector('[data-action="ws-drive"]').style.display = isCard ? '' : 'none';
         menu.querySelector('[data-action="ws-rename"]').style.display = isCard ? '' : 'none';
         menu.querySelector('[data-action="ws-permissions"]').style.display = isCard ? '' : 'none';
         menu.querySelector('[data-action="ws-delete"]').style.display = isCard ? '' : 'none';
         menu.querySelector('[data-action="ws-new"]').style.display = isCard ? 'none' : '';
         var sep = menu.querySelector('hr');
         if (sep) sep.style.display = isCard ? '' : 'none';
+        keepMenuOnScreen(menu);
+        if (fromKeyboard) focusMenu(menu);
+    }
+
+    // keepMenuOnScreen nudges a menu that would overflow the window.
+    function keepMenuOnScreen(menu) {
+        var r = menu.getBoundingClientRect();
+        if (r.right > window.innerWidth - 8) menu.style.left = Math.max(8, window.innerWidth - r.width - 8) + 'px';
+        if (r.bottom > window.innerHeight - 8) menu.style.top = Math.max(8, window.innerHeight - r.height - 8) + 'px';
     }
 
     async function onWsContextAction(e) {
-        var action = e.target.dataset.action;
+        var action = e.target.closest('button').dataset.action;
         document.getElementById('ws-context-menu').classList.add('hidden');
+        restoreMenuFocus();
         switch (action) {
             case 'ws-open':
                 if (wsContextTargetId) openWorkspace(wsContextTargetId);
                 break;
+            case 'ws-drive':
+                var target = knownWorkspaces.filter(function (w) { return w.id === wsContextTargetId; })[0];
+                if (target && target.driveFolderUrl && window.runtime) window.runtime.BrowserOpenURL(target.driveFolderUrl);
+                break;
             case 'ws-rename':
                 if (!wsContextTargetId) break;
-                var newName = prompt('Rename workspace:', wsContextTargetName);
-                if (newName && newName.trim()) {
-                    await window.go.main.App.RenameWorkspace(wsContextTargetId, newName.trim());
-                    var ws = await window.go.main.App.GetWorkspaces();
-                    showWorkspacesView(ws);
-                }
+                startWorkspaceRename(wsContextTargetId);
                 break;
             case 'ws-delete':
                 if (!wsContextTargetId) break;
-                if (confirm('Delete workspace "' + wsContextTargetName + '"? Local data will be removed. Google Drive folder is not affected.')) {
-                    await window.go.main.App.DeleteWorkspace(wsContextTargetId);
+                var delId = wsContextTargetId;
+                var ok = await askConfirm(
+                    'Remove "' + wsContextTargetName + '" from this PC?',
+                    'The Google Drive folder and its published pages stay on Drive, and you can add the workspace again later. Drafts that were never published are deleted.',
+                    'Remove from this PC', true);
+                if (ok) {
+                    await window.go.main.App.DeleteWorkspace(delId);
                     var ws2 = await window.go.main.App.GetWorkspaces();
                     showWorkspacesView(ws2);
                 }
@@ -356,8 +778,9 @@
     }
 
     async function doSignOut() {
+        await leaveEditor();
         await window.go.main.App.SignOut();
-        showView('view-signin');
+        showSigninView('');
     }
 
     function bindWorkspacesEvents() {
@@ -388,10 +811,12 @@
             document.getElementById('empty-state').classList.remove('hidden');
             await loadTree();
             // Pull published pages from Drive
-            triggerSync();
+            triggerSync({ quiet: true });
+            // Refresh the member cache quietly so workspace cards can show
+            // whether this folder is yours or shared with you.
+            window.go.main.App.GetWorkspaceMembers(activeWorkspace.id).catch(function () { /* optional */ });
         } catch (e) {
-            console.error('Open workspace error:', e);
-            showToast('Failed to open workspace', 'error');
+            showError('open the workspace', e);
         }
     }
 
@@ -404,7 +829,7 @@
             loadFolders('root');
         });
 
-        document.getElementById('btn-path-join').addEventListener('click', function () {
+        document.getElementById('btn-path-join').addEventListener('click', async function () {
             showView('view-join');
             loadSharedFolders('');
         });
@@ -424,7 +849,7 @@
                 loadFolders(parentId);
                 showToast('Folder created', 'success');
             } catch (e) {
-                showToast('Error creating folder: ' + (e.message || e), 'error');
+                showError('create the folder', e);
             }
         });
 
@@ -438,7 +863,7 @@
                 showToast('Workspace created!', 'success');
                 showWorkspacesView(workspaces);
             } catch (e) {
-                showToast('Error creating workspace: ' + (e.message || e), 'error');
+                showError('create the workspace', e);
             }
         });
 
@@ -480,7 +905,9 @@
                 // Deselect any list selection
                 document.querySelectorAll('#shared-folder-list .folder-item').forEach(function (b) { b.classList.remove('selected'); });
             } catch (e) {
-                resultEl.textContent = 'Error: ' + (e.message || e);
+                resultEl.textContent = errorCode(e) === 'ERR_NOTFOUND'
+                    ? 'No folder found at that link, or it isn\u2019t shared with ' + ((authStatus && authStatus.userEmail) || 'you') + '.'
+                    : describeError(e).text;
                 resultEl.className = 'status-text error-text';
                 selectedSharedFolder = null;
                 document.getElementById('btn-join-select').disabled = true;
@@ -500,7 +927,7 @@
                 showToast('Workspace joined!', 'success');
                 showWorkspacesView(workspaces);
             } catch (e) {
-                showToast('Error joining workspace: ' + (e.message || e), 'error');
+                showError('join the workspace', e);
             }
         });
 
@@ -547,7 +974,8 @@
             });
         } catch (e) {
             loadingEl.classList.add('hidden');
-            listEl.innerHTML = '<div class="folder-empty">Error loading shared folders: ' + escapeHtml(e.message || String(e)) + '</div>';
+            console.error('SearchSharedFolders:', errorMessage(e));
+            listEl.innerHTML = '<div class="folder-empty">' + escapeHtml(describeError(e, 'load shared folders').text) + '</div>';
         }
     }
 
@@ -582,7 +1010,8 @@
             });
         } catch (e) {
             loadingEl.classList.add('hidden');
-            listEl.innerHTML = '<div class="folder-empty">Error loading folders: ' + escapeHtml(e.message || String(e)) + '</div>';
+            console.error('ListDriveFolders:', errorMessage(e));
+            listEl.innerHTML = '<div class="folder-empty">' + escapeHtml(describeError(e, 'load your Drive folders').text) + '</div>';
         }
     }
 
@@ -609,19 +1038,7 @@
 
         editor = new TipTap.Editor({
             element: document.getElementById('editor'),
-            extensions: [
-                TipTap.StarterKit,
-                TipTap.Image.configure({ inline: false, allowBase64: false, HTMLAttributes: { draggable: 'true' } }),
-                TipTap.Placeholder.configure({ placeholder: 'Start writing...' }),
-                TipTap.Table.configure({ resizable: true }),
-                TipTap.TableRow,
-                TipTap.TableCell,
-                TipTap.TableHeader,
-                TipTap.TaskList,
-                TipTap.TaskItem.configure({ nested: true }),
-                TipTap.Link.configure({ openOnClick: false }),
-                TipTap.Markdown,
-            ],
+            extensions: editorExtensions(true),
             onUpdate: function () { onEditorChange(); },
             editorProps: {
                 handleDrop: function (view, event, slice, moved) {
@@ -655,6 +1072,88 @@
 
         // Build the toolbar for TipTap (it doesn't include one by default)
         buildEditorToolbar();
+
+        // Links open in the browser with Ctrl+click (plain clicks edit text).
+        document.getElementById('editor').addEventListener('click', function (e) {
+            var a = e.target.closest('a[href]');
+            if (!a || !(e.ctrlKey || e.metaKey)) return;
+            e.preventDefault();
+            var url = normalizeUrl(a.getAttribute('href'));
+            if (url && window.runtime) window.runtime.BrowserOpenURL(url);
+        });
+    }
+
+    // normalizeUrl accepts web and mail links only; a bare domain gets https://.
+    function normalizeUrl(raw) {
+        var url = (raw || '').trim();
+        if (!url) return '';
+        if (/^mailto:/i.test(url)) return url;
+        if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) url = 'https://' + url.replace(/^\/+/, '');
+        return /^https?:\/\/[^\s]+$/i.test(url) ? url : '';
+    }
+
+    // editLink adds, changes or removes the link on the selection.
+    async function editLink() {
+        if (!editor) return;
+        var prev = editor.getAttributes('link').href || '';
+        var choices = [];
+        if (prev) choices.push({ id: 'link-remove', label: 'Remove link', value: 'remove', kind: 'secondary' });
+        choices.push({ id: 'link-ok', label: prev ? 'Update link' : 'Add link', value: 'ok', kind: 'primary' });
+        var res = await askText({
+            title: prev ? 'Edit link' : 'Add link',
+            body: '',
+            label: 'Web address',
+            value: prev,
+            placeholder: 'https://example.com',
+            choices: choices,
+        });
+        if (!res) return;
+        var chain = editor.chain().focus().extendMarkRange('link');
+        if (res.choice === 'remove') { chain.unsetLink().run(); return; }
+        var url = normalizeUrl(res.text);
+        if (!url) { showToast('Enter a web address such as https://example.com', 'warning'); return; }
+        if (editor.state.selection.empty && !prev) {
+            editor.chain().focus().insertContent({ type: 'text', text: url, marks: [{ type: 'link', attrs: { href: url } }] }).run();
+        } else {
+            chain.setLink({ href: url }).run();
+        }
+    }
+
+    // editorExtensions builds the extension list shared by the main editor
+    // and the read-only version preview.
+    function editorExtensions(editable) {
+        return [
+            TipTap.StarterKit,
+            TipTap.Image.configure({ inline: false, allowBase64: false, HTMLAttributes: { draggable: editable ? 'true' : 'false' } }),
+            TipTap.Placeholder.configure({ placeholder: editable ? 'Start writing...' : '' }),
+            TipTap.Table.configure({ resizable: editable }),
+            TipTap.TableRow,
+            TipTap.TableCell,
+            TipTap.TableHeader,
+            TipTap.TaskList,
+            TipTap.TaskItem.configure({ nested: true }),
+            TipTap.Link.configure({ openOnClick: false }),
+            TipTap.Markdown,
+        ];
+    }
+
+    // The version preview is a read-only editor, so it looks like the page.
+    var previewEditor = null;
+
+    function showPreviewMarkdown(markdown) {
+        var el = document.getElementById('history-preview-content');
+        if (!previewEditor) {
+            previewEditor = new TipTap.Editor({ element: el, editable: false, extensions: editorExtensions(false) });
+        }
+        previewEditor.commands.setContent(markdown || '', { emitUpdate: false });
+        el.scrollTop = 0;
+    }
+
+    function setPreviewStatus(text) {
+        var st = document.getElementById('history-preview-status');
+        st.textContent = text || '';
+        st.classList.toggle('hidden', !text);
+        document.getElementById('history-preview-content').classList.toggle('hidden', !!text);
     }
 
     async function uploadAndInsertImage(file) {
@@ -681,7 +1180,7 @@
                     url = url.replace(/^\/+/, '/');
                     resolve(url);
                 } catch (e) {
-                    showToast('Image upload failed: ' + (e.message || e), 'error');
+                    showError('add the image', e);
                     resolve(null);
                 }
             };
@@ -693,31 +1192,42 @@
         var toolbar = document.createElement('div');
         toolbar.className = 'editor-toolbar';
 
+        var ICON_LINK = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.5 9.5l3-3M7 4.5l1-1a2.8 2.8 0 014 4l-1 1M9 11.5l-1 1a2.8 2.8 0 01-4-4l1-1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+        var ICON_UNDO = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5 3L2 6l3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 6H10a4 4 0 010 8H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+        var ICON_REDO = '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M11 3l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.5 6H6a4 4 0 000 8h3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>';
+
+        // name: accessible name and tooltip; keys: TipTap's built-in shortcut
+        // (see the extensions' addKeyboardShortcuts), shown in the tooltip.
         var groups = [
             [
-                { label: 'H1', cmd: function () { editor.chain().focus().toggleHeading({ level: 1 }).run(); }, active: function () { return editor.isActive('heading', { level: 1 }); } },
-                { label: 'H2', cmd: function () { editor.chain().focus().toggleHeading({ level: 2 }).run(); }, active: function () { return editor.isActive('heading', { level: 2 }); } },
-                { label: 'H3', cmd: function () { editor.chain().focus().toggleHeading({ level: 3 }).run(); }, active: function () { return editor.isActive('heading', { level: 3 }); } },
+                { icon: ICON_UNDO, name: 'Undo', keys: 'Mod+Z', cmd: function () { editor.chain().focus().undo().run(); }, enabled: function () { return editor.can().undo(); } },
+                { icon: ICON_REDO, name: 'Redo', keys: 'Mod+Y', cmd: function () { editor.chain().focus().redo().run(); }, enabled: function () { return editor.can().redo(); } },
             ],
             [
-                { label: 'B', cmd: function () { editor.chain().focus().toggleBold().run(); }, active: function () { return editor.isActive('bold'); }, style: 'font-weight:bold' },
-                { label: 'I', cmd: function () { editor.chain().focus().toggleItalic().run(); }, active: function () { return editor.isActive('italic'); }, style: 'font-style:italic' },
-                { label: 'S', cmd: function () { editor.chain().focus().toggleStrike().run(); }, active: function () { return editor.isActive('strike'); }, style: 'text-decoration:line-through' },
-                { label: '<>', cmd: function () { editor.chain().focus().toggleCode().run(); }, active: function () { return editor.isActive('code'); } },
+                { label: 'H1', name: 'Heading 1', keys: 'Mod+Alt+1', cmd: function () { editor.chain().focus().toggleHeading({ level: 1 }).run(); }, active: function () { return editor.isActive('heading', { level: 1 }); } },
+                { label: 'H2', name: 'Heading 2', keys: 'Mod+Alt+2', cmd: function () { editor.chain().focus().toggleHeading({ level: 2 }).run(); }, active: function () { return editor.isActive('heading', { level: 2 }); } },
+                { label: 'H3', name: 'Heading 3', keys: 'Mod+Alt+3', cmd: function () { editor.chain().focus().toggleHeading({ level: 3 }).run(); }, active: function () { return editor.isActive('heading', { level: 3 }); } },
             ],
             [
-                { label: '\u2014', title: 'Horizontal Rule', cmd: function () { editor.chain().focus().setHorizontalRule().run(); } },
-                { label: '\u201C', title: 'Blockquote', cmd: function () { editor.chain().focus().toggleBlockquote().run(); }, active: function () { return editor.isActive('blockquote'); } },
+                { label: 'B', name: 'Bold', keys: 'Mod+B', cmd: function () { editor.chain().focus().toggleBold().run(); }, active: function () { return editor.isActive('bold'); }, style: 'font-weight:bold' },
+                { label: 'I', name: 'Italic', keys: 'Mod+I', cmd: function () { editor.chain().focus().toggleItalic().run(); }, active: function () { return editor.isActive('italic'); }, style: 'font-style:italic' },
+                { label: 'S', name: 'Strikethrough', keys: 'Mod+Shift+S', cmd: function () { editor.chain().focus().toggleStrike().run(); }, active: function () { return editor.isActive('strike'); }, style: 'text-decoration:line-through' },
+                { label: '<>', name: 'Inline code', keys: 'Mod+E', cmd: function () { editor.chain().focus().toggleCode().run(); }, active: function () { return editor.isActive('code'); } },
+                { icon: ICON_LINK, name: 'Link', keys: '', cmd: function () { editLink(); }, active: function () { return editor.isActive('link'); } },
             ],
             [
-                { label: '\u2022', title: 'Bullet List', cmd: function () { editor.chain().focus().toggleBulletList().run(); }, active: function () { return editor.isActive('bulletList'); } },
-                { label: '1.', title: 'Ordered List', cmd: function () { editor.chain().focus().toggleOrderedList().run(); }, active: function () { return editor.isActive('orderedList'); } },
-                { label: '\u2611', title: 'Task List', cmd: function () { editor.chain().focus().toggleTaskList().run(); }, active: function () { return editor.isActive('taskList'); } },
+                { label: '—', name: 'Horizontal rule', keys: '', hint: 'or type --- on an empty line', cmd: function () { editor.chain().focus().setHorizontalRule().run(); } },
+                { label: '“', name: 'Quote', keys: 'Mod+Shift+B', cmd: function () { editor.chain().focus().toggleBlockquote().run(); }, active: function () { return editor.isActive('blockquote'); } },
             ],
             [
-                { label: '\u229E', title: 'Table', cmd: function () { editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); } },
+                { label: '•', name: 'Bullet list', keys: 'Mod+Shift+8', cmd: function () { editor.chain().focus().toggleBulletList().run(); }, active: function () { return editor.isActive('bulletList'); } },
+                { label: '1.', name: 'Numbered list', keys: 'Mod+Shift+7', cmd: function () { editor.chain().focus().toggleOrderedList().run(); }, active: function () { return editor.isActive('orderedList'); } },
+                { label: '☑', name: 'Task list', keys: 'Mod+Shift+9', cmd: function () { editor.chain().focus().toggleTaskList().run(); }, active: function () { return editor.isActive('taskList'); } },
+            ],
+            [
+                { label: '⊞', name: 'Table', keys: '', cmd: function () { editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); } },
                 {
-                    label: '\uD83D\uDDBC', title: 'Image', cmd: function () {
+                    label: '🖼', name: 'Image', keys: '', hint: 'or paste / drop an image', cmd: function () {
                         var input = document.createElement('input');
                         input.type = 'file';
                         input.accept = 'image/*';
@@ -727,23 +1237,32 @@
                 },
             ],
             [
-                { label: '{}', title: 'Code Block', cmd: function () { editor.chain().focus().toggleCodeBlock().run(); }, active: function () { return editor.isActive('codeBlock'); } },
-                { label: '⎇', title: 'Mermaid Diagram', cmd: function () { HexMermaid.insert(editor); }, active: function () { return HexMermaid.isActive(editor); } },
+                { label: '{}', name: 'Code block', keys: 'Mod+Alt+C', cmd: function () { editor.chain().focus().toggleCodeBlock().run(); }, active: function () { return editor.isActive('codeBlock'); } },
+                { label: '⎇', name: 'Mermaid diagram', keys: '', cmd: function () { HexMermaid.insert(editor); }, active: function () { return HexMermaid.isActive(editor); } },
             ],
         ];
+
+        toolbar.setAttribute('role', 'toolbar');
+        toolbar.setAttribute('aria-label', 'Formatting');
 
         groups.forEach(function (group, gi) {
             if (gi > 0) {
                 var sep = document.createElement('span');
                 sep.className = 'toolbar-sep';
+                sep.setAttribute('aria-hidden', 'true');
                 toolbar.appendChild(sep);
             }
             group.forEach(function (btn) {
                 var el = document.createElement('button');
                 el.className = 'toolbar-btn';
-                el.textContent = btn.label;
-                el.title = btn.title || btn.label;
+                if (btn.icon) el.innerHTML = btn.icon; else el.textContent = btn.label;
+                el.setAttribute('aria-label', btn.name);
+                el.title = btn.name + (btn.keys ? ' (' + shortcutLabel(btn.keys) + ')' : '') + (btn.hint ? ' — ' + btn.hint : '');
+                if (btn.keys) el.setAttribute('aria-keyshortcuts', btn.keys.replace('Mod', isMac ? 'Meta' : 'Control'));
+                if (btn.active) el.setAttribute('aria-pressed', 'false');
                 if (btn.style) el.setAttribute('style', btn.style);
+                // Keep the editor's selection: act on mousedown's default being prevented.
+                el.addEventListener('mousedown', function (e) { e.preventDefault(); });
                 el.addEventListener('click', function (e) { e.preventDefault(); btn.cmd(); updateToolbarState(); });
                 toolbar.appendChild(el);
             });
@@ -762,17 +1281,19 @@
             var idx = 0;
             groups.forEach(function (group) {
                 group.forEach(function (btn) {
-                    if (buttons[idx]) {
-                        if (btn.active && btn.active()) {
-                            buttons[idx].classList.add('active');
-                        } else {
-                            buttons[idx].classList.remove('active');
-                        }
+                    var el = buttons[idx++];
+                    if (!el) return;
+                    if (btn.active) {
+                        var on = !!btn.active();
+                        el.classList.toggle('active', on);
+                        el.setAttribute('aria-pressed', on ? 'true' : 'false');
                     }
-                    idx++;
+                    if (btn.enabled) el.disabled = !btn.enabled();
                 });
             });
         }
+        updateToolbarState();
+        refreshToolbar = updateToolbarState;
     }
 
     function bindEditorEvents() {
@@ -803,6 +1324,55 @@
         // Right-click on sidebar empty space → create at root level
         var pageTreeEl = document.getElementById('page-tree');
         if (pageTreeEl) {
+            // Dropping on empty space moves to the end of the top level.
+            pageTreeEl.addEventListener('dragover', function (e) {
+                if (!dragId || e.target.closest('.tree-item')) return;
+                e.preventDefault();
+                clearDropMarks();
+                pageTreeEl.classList.add('drop-root');
+            });
+            pageTreeEl.addEventListener('dragleave', function (e) {
+                if (e.target === pageTreeEl) pageTreeEl.classList.remove('drop-root');
+            });
+            pageTreeEl.addEventListener('drop', function (e) {
+                if (!dragId || e.target.closest('.tree-item')) return;
+                e.preventDefault();
+                var id = dragId;
+                dragId = null;
+                clearDropMarks();
+                moveDocument(id, '', '');
+            });
+            document.getElementById('btn-close-move').addEventListener('click', closeMovePicker);
+            document.getElementById('move-modal').addEventListener('mousedown', function (e) {
+                if (e.target.id === 'move-modal') closeMovePicker();
+            });
+            document.getElementById('move-modal').addEventListener('keydown', function (e) {
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    var opts = Array.prototype.slice.call(document.querySelectorAll('#move-list .move-option:not([disabled])'));
+                    var i = opts.indexOf(document.activeElement);
+                    var next = opts[(i + (e.key === 'ArrowDown' ? 1 : -1) + opts.length) % opts.length];
+                    if (next) next.focus();
+                }
+            });
+
+            // Double-click or F2 renames in place.
+            pageTreeEl.addEventListener('dblclick', function (e) {
+                var item = e.target.closest('.tree-item');
+                if (!item || e.target.closest('.tree-toggle')) return;
+                e.preventDefault();
+                startInlineRename(item.dataset.id);
+            });
+            pageTreeEl.addEventListener('keydown', onTreeKeydown);
+            bindMenuKeys(document.getElementById('context-menu'));
+            bindMenuKeys(document.getElementById('ws-context-menu'));
+            pageTreeEl.addEventListener('keydown', function (e) {
+                if (e.key !== 'F2') return;
+                var item = e.target.closest('.tree-item') || pageTreeEl.querySelector('.tree-item.selected');
+                if (!item) return;
+                e.preventDefault();
+                startInlineRename(item.dataset.id);
+            });
             pageTreeEl.addEventListener('contextmenu', function (e) {
                 // Only fire if clicking the sidebar background, not a tree item
                 if (e.target.closest('.tree-item')) return;
@@ -810,6 +1380,10 @@
                 showContextMenu(e, null);
             });
         }
+
+        // Global shortcuts: Ctrl+N new page, Ctrl+K search, Ctrl+Shift+P
+        // publish, Esc closes menus and dialogs.
+        document.addEventListener('keydown', onGlobalKeydown);
 
         // Capture phase Ctrl+S for save (prevent browser default)
         document.addEventListener('keydown', function (e) {
@@ -827,7 +1401,8 @@
             showWorkspacesView(workspaces);
         });
 
-        document.getElementById('btn-sync').addEventListener('click', triggerSync);
+        document.getElementById('btn-sync').addEventListener('click', function () { triggerSync(); });
+        document.getElementById('btn-open-drive').addEventListener('click', openWorkspaceInDrive);
         document.getElementById('btn-publish').addEventListener('click', publishCurrentDoc);
 
         document.getElementById('btn-share').addEventListener('click', function () {
@@ -836,43 +1411,264 @@
         });
 
         document.getElementById('btn-history').addEventListener('click', openVersionHistory);
+
+        document.getElementById('btn-dismiss-draft-hint').addEventListener('click', function () {
+            draftHintDismissed = true;
+            renderDocStatus();
+            window.go.main.App.SetUIState('draft-hint-dismissed', '1').catch(function (e) { console.error('SetUIState:', errorMessage(e)); });
+        });
+    }
+
+    function onGlobalKeydown(e) {
+        if (sheetResolve) return; // the confirmation sheet handles its own keys
+        var mod = e.ctrlKey || e.metaKey;
+        var inEditorView = currentView() === 'view-editor';
+
+        if (e.key === 'Escape') {
+            if (closeTopLayer()) e.preventDefault();
+            return;
+        }
+        if (!mod || !inEditorView) return;
+        var key = e.key.toLowerCase();
+
+        if (key === 'n' && !e.shiftKey && !e.altKey) {
+            e.preventDefault(); // WebView2 would open a new window
+            var cur = currentDocId ? findDoc(currentDocId) : null;
+            createDocument(cur ? (cur.parentId || '') : '', false);
+        } else if (key === 'k' && !e.shiftKey && !e.altKey) {
+            e.preventDefault();
+            var search = document.getElementById('search-input');
+            search.focus();
+            search.select();
+        } else if (key === 'p' && e.shiftKey) {
+            e.preventDefault();
+            var btn = document.getElementById('btn-publish');
+            if (currentDocId && btn.style.display !== 'none' && !btn.disabled) publishCurrentDoc();
+        }
+    }
+
+    // closeTopLayer closes the topmost open menu, search result list or
+    // dialog. Returns whether anything was closed.
+    function closeTopLayer() {
+        var menus = ['context-menu', 'ws-context-menu'].map(function (id) { return document.getElementById(id); })
+            .filter(function (m) { return m && !m.classList.contains('hidden'); });
+        if (menus.length) {
+            menus.forEach(function (m) { m.classList.add('hidden'); });
+            restoreMenuFocus();
+            return true;
+        }
+        var results = document.getElementById('search-results');
+        if (!results.classList.contains('hidden')) {
+            results.classList.add('hidden');
+            document.getElementById('search-input').blur();
+            return true;
+        }
+        var modals = ['move-modal', 'history-modal', 'sharing-modal', 'settings-modal'];
+        for (var i = 0; i < modals.length; i++) {
+            var m = document.getElementById(modals[i]);
+            if (m && !m.classList.contains('hidden')) {
+                m.classList.add('hidden');
+                return true;
+            }
+        }
+        return false;
     }
 
     // === Sync & Publish ===
-    async function triggerSync() {
+    // triggerSync pulls published pages from Drive. opts.quiet (automatic
+    // refreshes) shows a toast only when something changed and reports
+    // failures in the status bar instead of a toast. Concurrent calls share
+    // one refresh.
+    function triggerSync(opts) {
+        var quiet = !!(opts && opts.quiet === true);
+        if (refreshInFlight) return refreshInFlight;
+        refreshInFlight = runRefresh(quiet).finally(function () { refreshInFlight = null; });
+        return refreshInFlight;
+    }
+
+    async function runRefresh(quiet) {
         var syncBtn = document.getElementById('btn-sync');
         var statusEl = document.getElementById('sync-status-text');
+        // Save pending typing first: a saved edit makes the page a draft, and
+        // a refresh never overwrites drafts.
+        if (currentDocId && window.__hexnoteHasUnsaved) await saveNow();
+        lastRefreshAt = Date.now();
         syncBtn.classList.add('syncing');
-        statusEl.textContent = 'Refreshing...';
+        statusEl.textContent = 'Refreshing from Drive\u2026';
         try {
-            await window.go.main.App.TriggerSync();
-            statusEl.textContent = 'Up to date';
-            showToast('Refreshed from Drive', 'success');
+            var sum = await window.go.main.App.TriggerSync();
+            var updated = (sum && sum.updated) || [];
+            statusEl.textContent = 'Refreshed from Drive at ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             await loadTree();
+            if (updated.length) {
+                showToast(updated.length === 1 ? '1 page updated from Drive' : updated.length + ' pages updated from Drive', 'info');
+            } else if (!quiet && !((sum && sum.removed && sum.removed.length) || (sum && sum.detached && sum.detached.length))) {
+                showToast('Already up to date', 'success', 2500);
+            }
         } catch (e) {
-            statusEl.textContent = 'Refresh error';
-            showToast('Refresh failed: ' + (e.message || e), 'error');
+            if (quiet) {
+                console.error('[auto-refresh]', errorMessage(e));
+                statusEl.textContent = errorCode(e) === 'ERR_OFFLINE'
+                    ? 'Offline. Your pages are saved on this PC.'
+                    : 'Couldn\u2019t refresh from Drive';
+            } else {
+                statusEl.textContent = 'Couldn\u2019t refresh from Drive';
+                showError('refresh from Drive', e, triggerSync);
+            }
         } finally {
             syncBtn.classList.remove('syncing');
         }
     }
 
+    // scheduleAutoRefresh (re)starts the periodic refresh timer.
+    function scheduleAutoRefresh() {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+        if (syncIntervalSecs > 0) {
+            refreshTimer = setInterval(function () { autoRefresh('timer'); }, syncIntervalSecs * 1000);
+        }
+    }
+
+    // autoRefresh refreshes quietly while a workspace is open. Focus-triggered
+    // refreshes are throttled to one a minute.
+    function autoRefresh(reason) {
+        if (currentView() !== 'view-editor' || !activeWorkspace) return;
+        if (reason === 'focus' && Date.now() - lastRefreshAt < 60000) return;
+        triggerSync({ quiet: true });
+    }
+
+    function isOpenPageClean() {
+        return !window.__hexnoteHasUnsaved && saveState === 'saved' &&
+            !!currentDocMeta && currentDocMeta.status === 'published';
+    }
+
+    // reloadCurrentDoc shows the stored version of the open page (after a
+    // teammate's change came in from Drive).
+    async function reloadCurrentDoc() {
+        var id = currentDocId;
+        try {
+            var doc = await window.go.main.App.GetDocument(id);
+            if (id !== currentDocId || !isOpenPageClean()) return; // user moved on or started typing
+            applyDocToEditor(doc);
+        } catch (e) {
+            console.error('reloadCurrentDoc:', errorMessage(e));
+        }
+    }
+
     async function publishCurrentDoc() {
         if (!currentDocId) return;
-        await saveNow();
         var btn = document.getElementById('btn-publish');
         btn.disabled = true;
         btn.textContent = 'Publishing...';
         try {
-            var doc = await window.go.main.App.PublishDocument(currentDocId);
-            showToast('Published to Drive', 'success');
-            btn.style.display = 'none';
-            await loadTree();
-        } catch (e) {
-            showToast('Publish failed: ' + (e.message || e), 'error');
+            await publishDocument(currentDocId);
         } finally {
             btn.disabled = false;
-            btn.textContent = 'Publish';
+            renderDocStatus();
+        }
+    }
+
+    // publishDocument publishes a page or folder (saving the open page first)
+    // and reports whether it succeeded.
+    async function publishDocument(id) {
+        if (id === currentDocId) await saveNow();
+        try {
+            var doc = await window.go.main.App.PublishDocument(id);
+            if (id === currentDocId) setDocMeta(doc);
+            showToast(doc && doc.isFolder ? 'Folder published to Drive' : 'Published to Drive', 'success');
+            await loadTree();
+            return true;
+        } catch (e) {
+            if (errorCode(e) === 'ERR_CONFLICT') return resolveConflict(id, e);
+            showError('publish', e, function () { publishDocument(id); });
+            return false;
+        }
+    }
+
+    // resolveConflict runs when Publish finds a newer version on Drive than
+    // the one this PC last saw. The user picks: overwrite theirs, load theirs
+    // (discarding local edits after a second confirmation), or keep both.
+    async function resolveConflict(id, e) {
+        var info = {};
+        try { info = JSON.parse(errorMessage(e).replace(/^ERR_CONFLICT:\s*/, '')); } catch (err) { /* keep defaults */ }
+        var who = info.by || 'Someone';
+        var when = info.at ? new Date(info.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+        var doc = findDoc(id);
+        var title = doc ? doc.title : 'this page';
+
+        var choice = await askChoice({
+            title: who + ' changed \u201c' + title + '\u201d on Drive',
+            body: who + ' published a newer version' + (when ? ' (' + when + ')' : '') +
+                ' after this PC last refreshed the page. Publishing now would replace their text with yours.',
+            choices: [
+                { id: 'conflict-theirs', label: 'Load theirs', value: 'theirs', kind: 'secondary' },
+                { id: 'conflict-both', label: 'Keep both', value: 'both', kind: 'primary' },
+                { id: 'conflict-overwrite', label: 'Overwrite theirs', value: 'overwrite', kind: 'danger' },
+            ],
+        });
+
+        try {
+            if (choice === 'overwrite') {
+                var pub = await window.go.main.App.ForcePublishDocument(id);
+                if (id === currentDocId) setDocMeta(pub);
+                await loadTree();
+                showToast('Published. ' + who + '\u2019s version is still in Version History.', 'success', 6000);
+                return true;
+            }
+            if (choice === 'theirs') {
+                var sure = await askConfirm('Discard your unpublished edits?',
+                    'Your changes to \u201c' + title + '\u201d are replaced by ' + who + '\u2019s version. They cannot be recovered.',
+                    'Discard my edits', true);
+                if (!sure) return false;
+                var theirs = await window.go.main.App.DiscardLocalChanges(id);
+                if (id === currentDocId) applyDocToEditor(theirs);
+                await loadTree();
+                showToast('Loaded ' + who + '\u2019s version', 'success');
+                return true;
+            }
+            if (choice === 'both') {
+                var mine = await window.go.main.App.KeepBothVersions(id);
+                if (id === currentDocId) applyDocToEditor(await window.go.main.App.GetDocument(id));
+                await loadTree();
+                showToast('Your text is saved as \u201c' + mine.title + '\u201d (not published yet).', 'success', 8000,
+                    { label: 'Open', run: function () { selectDocument(mine.id); } });
+                return true;
+            }
+        } catch (err) {
+            showError('resolve the conflict', err);
+        }
+        return false;
+    }
+
+    // applyDocToEditor shows a stored document in the editor as saved.
+    function applyDocToEditor(doc) {
+        clearTimeout(saveTimeout);
+        document.getElementById('doc-title').value = doc.title;
+        loadEditorContent(doc.content);
+        markClean(doc.title);
+        saveState = 'saved';
+        setDocMeta(doc);
+    }
+
+    // renameDocument changes only the title of a page or folder. A folder
+    // rename goes to Drive right away when possible.
+    async function renameDocument(doc, title) {
+        var isCurrent = currentDocId === doc.id;
+        // Flush pending body edits first so the rename cannot race them.
+        if (isCurrent) await saveNow();
+        try {
+            var updated = await window.go.main.App.RenameDocument(doc.id, title);
+            if (isCurrent) {
+                document.getElementById('doc-title').value = updated.title;
+                lastKnownTitle = updated.title;
+                setDocMeta(updated);
+            }
+            if (updated.isFolder && updated.driveFileId && updated.status === 'draft') {
+                showToast('Renamed on this PC. Publish the folder to rename it on Drive.', 'warning', 6000);
+            }
+            await loadTree();
+        } catch (e) {
+            showError('rename', e);
         }
     }
 
@@ -892,7 +1688,7 @@
                 showToast('Invitation sent to ' + email, 'success');
                 loadMembers();
             } catch (e) {
-                showToast('Error sharing: ' + (e.message || e), 'error');
+                showError('share the workspace', e);
             }
         });
     }
@@ -911,14 +1707,23 @@
                     '<div><strong>' + escapeHtml(m.displayName || m.email) + '</strong>' +
                     (m.displayName ? '<br><span class="text-muted">' + escapeHtml(m.email) + '</span>' : '') +
                     '</div>' +
-                    '<span class="member-role">' + m.role + '</span>' +
-                    (m.role !== 'owner' ? '<button class="btn-icon btn-danger member-remove" data-email="' + escapeHtml(m.email) + '">&times;</button>' : '') +
+                    '<span class="member-role">' + escapeHtml(m.role) + '</span>' +
+                    (m.role !== 'owner' ? '<button class="btn-icon btn-danger member-remove" data-email="' + escapeHtml(m.email) + '" title="Remove access" aria-label="Remove ' + escapeHtml(m.email) + '">&times;</button>' : '') +
                     '</div>';
             }).join('');
 
             listEl.querySelectorAll('.member-remove').forEach(function (btn) {
                 btn.addEventListener('click', async function () {
-                    await window.go.main.App.RemoveWorkspaceMember(activeWorkspace.id, btn.dataset.email);
+                    var email = btn.dataset.email;
+                    var ok = await askConfirm('Remove ' + email + '?',
+                        'They lose access to this workspace\u2019s Google Drive folder and stop seeing its pages. You can invite them again later.',
+                        'Remove access', true);
+                    if (!ok) return;
+                    try {
+                        await window.go.main.App.RemoveWorkspaceMember(activeWorkspace.id, email);
+                    } catch (e) {
+                        showError('remove ' + email, e);
+                    }
                     loadMembers();
                 });
             });
@@ -944,17 +1749,18 @@
         try {
             var revisions = await window.go.main.App.GetVersionHistory(currentDocId);
             if (!revisions || revisions.length === 0) {
-                listEl.innerHTML = '<p class="history-empty">No version history available. Sync to Drive first to enable version tracking.</p>';
+                listEl.innerHTML = '<p class="history-empty">No versions yet. Every publish saves a version on Google Drive.</p>';
                 return;
             }
             listEl.innerHTML = revisions.map(function (r) {
                 var date = new Date(r.modifiedTime).toLocaleString();
                 var user = r.lastModifyingUser || 'Unknown';
-                var sizeKB = Math.round((r.size || 0) / 1024);
-                return '<button class="history-item" data-rev="' + r.revisionId + '">' +
+                var size = r.size || 0;
+                var sizeText = size < 1024 ? size + ' bytes' : Math.round(size / 1024) + ' KB';
+                return '<button class="history-item" data-rev="' + escapeHtml(r.revisionId) + '">' +
                     '<span class="history-item-date">' + date + '</span>' +
                     '<span class="history-item-user">' + escapeHtml(user) + '</span>' +
-                    '<span class="history-item-size">' + sizeKB + ' KB</span>' +
+                    '<span class="history-item-size">' + sizeText + '</span>' +
                     '</button>';
             }).join('');
 
@@ -965,17 +1771,21 @@
                     selectedRevisionId = btn.dataset.rev;
                     previewEl.classList.remove('hidden');
                     document.getElementById('history-preview-date').textContent = btn.querySelector('.history-item-date').textContent;
-                    document.getElementById('history-preview-content').textContent = 'Loading...';
+                    setPreviewStatus('Loading\u2026');
                     try {
                         var content = await window.go.main.App.PreviewRevision(currentDocId, selectedRevisionId);
-                        document.getElementById('history-preview-content').textContent = content;
+                        if (selectedRevisionId !== btn.dataset.rev) return; // another version was picked meanwhile
+                        setPreviewStatus('');
+                        showPreviewMarkdown(content);
                     } catch (e) {
-                        document.getElementById('history-preview-content').textContent = 'Error loading revision: ' + (e.message || e);
+                        console.error('PreviewRevision:', errorMessage(e));
+                        setPreviewStatus(describeError(e, 'load this version').text);
                     }
                 });
             });
         } catch (e) {
-            listEl.innerHTML = '<p class="history-empty">' + escapeHtml(e.message || 'Error loading history') + '</p>';
+            console.error('GetVersionHistory:', errorMessage(e));
+            listEl.innerHTML = '<p class="history-empty">' + escapeHtml(describeError(e, 'load version history').text) + '</p>';
         }
     }
 
@@ -986,19 +1796,34 @@
 
         document.getElementById('btn-restore-version').addEventListener('click', async function () {
             if (!currentDocId || !selectedRevisionId) return;
-            if (!confirm('Restore this version? Your current content will be replaced.')) return;
+            var when = document.getElementById('history-preview-date').textContent;
+            var meta = currentDocMeta || {};
+            var keepNote = meta.status === 'draft'
+                ? ' Your unpublished edits are first saved as a separate draft page, so nothing is lost.'
+                : ' The current text stays in this list as the newest version.';
+            if (!(await askConfirm('Restore this version?',
+                'The page text is replaced with the version from ' + when + '.' + keepNote +
+                ' The restored text stays on this PC until you publish it.',
+                'Restore'))) return;
             try {
-                var doc = await window.go.main.App.RestoreVersion(currentDocId, selectedRevisionId);
-                // RestoreVersion already saved this to the DB — record it so auto-save doesn't re-save it
-                lastKnownContent = doc.content || '';
-                lastKnownTitle = doc.title || '';
-                editor.commands.setContent(lastKnownContent);
+                if (window.__hexnoteHasUnsaved) await saveNow();
+                var res = await window.go.main.App.RestoreVersion(currentDocId, selectedRevisionId);
+                var doc = res.document;
+                loadEditorContent(doc.content);
                 document.getElementById('doc-title').value = doc.title;
+                markClean(doc.title);
                 document.getElementById('history-modal').classList.add('hidden');
-                showToast('Version restored', 'success');
-                setSaveStatus('Saved');
+                setDocMeta(doc);
+                setSaveStatus('saved');
+                await loadTree();
+                if (res.backupId) {
+                    showToast('Version restored. Your previous text is in \u201c' + res.backupTitle + '\u201d.', 'success', 8000,
+                        { label: 'Open', run: function () { selectDocument(res.backupId); } });
+                } else {
+                    showToast('Version restored', 'success');
+                }
             } catch (e) {
-                showToast('Error restoring version: ' + (e.message || e), 'error');
+                showError('restore this version', e);
             }
         });
     }
@@ -1010,9 +1835,10 @@
                 var s = await window.go.main.App.GetSettings();
                 document.getElementById('setting-theme').value = s.theme || 'system';
                 document.getElementById('setting-autosave').value = s.autoSaveDelaySecs || 2;
+                document.getElementById('setting-sync-interval').value = s.syncIntervalSecs;
                 document.getElementById('settings-modal').classList.remove('hidden');
             } catch (e) {
-                showToast('Error loading settings', 'error');
+                showError('open settings', e);
             }
         });
 
@@ -1020,17 +1846,27 @@
             document.getElementById('settings-modal').classList.add('hidden');
         });
 
+        document.getElementById('btn-settings-signout').addEventListener('click', doSignOut);
+        document.getElementById('btn-settings-credentials').addEventListener('click', async function () {
+            await leaveEditor();
+            showCredentialsView(true); // set up or change the user's own credentials
+        });
+
         document.getElementById('btn-save-settings').addEventListener('click', async function () {
             var theme = document.getElementById('setting-theme').value;
             var autosave = parseInt(document.getElementById('setting-autosave').value) || 2;
+            var interval = parseInt(document.getElementById('setting-sync-interval').value, 10);
+            if (isNaN(interval) || interval < 0) interval = 120;
             try {
-                await window.go.main.App.UpdateSettings(0, theme, autosave);
+                var saved = await window.go.main.App.UpdateSettings(interval, theme, autosave);
                 applyTheme(theme);
                 autoSaveDelay = autosave * 1000;
+                syncIntervalSecs = saved && typeof saved.syncIntervalSecs === 'number' ? saved.syncIntervalSecs : interval;
+                scheduleAutoRefresh();
                 document.getElementById('settings-modal').classList.add('hidden');
                 showToast('Settings saved', 'success');
             } catch (e) {
-                showToast('Error saving settings: ' + (e.message || e), 'error');
+                showError('save settings', e);
             }
         });
 
@@ -1039,8 +1875,9 @@
                 var path = await window.go.main.App.ExportWorkspace();
                 showToast('Exported to: ' + path, 'success', 6000);
             } catch (e) {
-                if (e.message && e.message.indexOf('no folder selected') >= 0) return; // user cancelled
-                showToast('Export failed: ' + (e.message || e), 'error');
+                // Wails rejects with a plain string, so check the text, not e.message.
+                if (errorMessage(e).indexOf('no folder selected') >= 0) return; // user cancelled
+                showError('export the workspace', e);
             }
         });
     }
@@ -1060,6 +1897,9 @@
 
     function renderTree() {
         var pageTree = document.getElementById('page-tree');
+        // Re-rendering replaces the items; keep keyboard focus where it was.
+        var active = document.activeElement;
+        var refocusId = active && active.classList && active.classList.contains('tree-item') ? active.dataset.id : null;
         pageTree.innerHTML = '';
         if (!tree || tree.length === 0) return;
         tree.forEach(function (node) {
@@ -1067,12 +1907,117 @@
             if (node.document.isFolder && node.document.title.toLowerCase() === 'assets') return;
             pageTree.appendChild(renderNode(node, 0));
         });
+        // One item is in the Tab order: the focused, selected or first one.
+        var target = (refocusId && treeItemEl(refocusId)) || pageTree.querySelector('.tree-item.selected') || pageTree.querySelector('.tree-item');
+        if (target) {
+            target.tabIndex = 0;
+            if (refocusId) target.focus();
+        }
+    }
+
+    function treeItemEl(id) {
+        return document.querySelector('#page-tree .tree-item[data-id="' + cssEscape(id) + '"]');
+    }
+
+    function focusTreeItem(el) {
+        if (!el) return;
+        document.querySelectorAll('#page-tree .tree-item').forEach(function (n) { n.tabIndex = -1; });
+        el.tabIndex = 0;
+        el.focus();
+    }
+
+    // onTreeKeydown implements the tree keyboard pattern: arrows move and
+    // expand/collapse, Enter/Space opens, Delete deletes, Shift+F10 or the
+    // Menu key opens the context menu. (F2 renames; see bindEditorEvents.)
+    function onTreeKeydown(e) {
+        var item = e.target.closest && e.target.closest('.tree-item');
+        if (!item || e.target.tagName === 'INPUT') return;
+        var doc = findDoc(item.dataset.id);
+        if (!doc) return;
+        var items = Array.prototype.slice.call(document.querySelectorAll('#page-tree .tree-item'));
+        var i = items.indexOf(item);
+        var expanded = expandedFolders.has(doc.id);
+
+        switch (e.key) {
+            case 'ArrowDown': focusTreeItem(items[Math.min(i + 1, items.length - 1)]); break;
+            case 'ArrowUp': focusTreeItem(items[Math.max(i - 1, 0)]); break;
+            case 'Home': focusTreeItem(items[0]); break;
+            case 'End': focusTreeItem(items[items.length - 1]); break;
+            case 'ArrowRight':
+                if (doc.isFolder && !expanded) toggleFolder(doc.id);
+                else if (doc.isFolder) focusTreeItem(items[i + 1] && isDescendant(items[i + 1].dataset.id, doc.id) ? items[i + 1] : item);
+                break;
+            case 'ArrowLeft':
+                if (doc.isFolder && expanded) toggleFolder(doc.id);
+                else if (doc.parentId) focusTreeItem(treeItemEl(doc.parentId));
+                break;
+            case 'Enter':
+            case ' ':
+                if (doc.isFolder) toggleFolder(doc.id); else selectDocument(doc.id);
+                break;
+            case 'Delete':
+                deleteDocument(doc);
+                break;
+            case 'ContextMenu':
+                showContextMenu(anchorEvent(item), doc, true);
+                break;
+            case 'F10':
+                if (!e.shiftKey) return;
+                showContextMenu(anchorEvent(item), doc, true);
+                break;
+            default:
+                return;
+        }
+        e.preventDefault();
+    }
+
+    // anchorEvent fakes a mouse position just below an element, for menus
+    // opened from the keyboard.
+    function anchorEvent(el) {
+        var r = el.getBoundingClientRect();
+        return { clientX: Math.round(r.left + 24), clientY: Math.round(r.bottom) };
+    }
+
+    // Keyboard support shared by the context menus: arrows move between
+    // visible items; focus returns to where the menu was opened from.
+    var menuReturnFocus = null;
+
+    function focusMenu(menu) {
+        var first = visibleMenuItems(menu)[0];
+        if (first) first.focus();
+    }
+
+    function visibleMenuItems(menu) {
+        return Array.prototype.slice.call(menu.querySelectorAll('button')).filter(function (b) { return b.style.display !== 'none'; });
+    }
+
+    function bindMenuKeys(menu) {
+        menu.addEventListener('keydown', function (e) {
+            var items = visibleMenuItems(menu);
+            var i = items.indexOf(document.activeElement);
+            if (e.key === 'ArrowDown') { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+            else if (e.key === 'ArrowUp') { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+            else if (e.key === 'Home') { e.preventDefault(); items[0].focus(); }
+            else if (e.key === 'End') { e.preventDefault(); items[items.length - 1].focus(); }
+            else if (e.key === 'Tab') { e.preventDefault(); closeTopLayer(); }
+        });
+    }
+
+    function restoreMenuFocus() {
+        var el = menuReturnFocus;
+        menuReturnFocus = null;
+        if (el && document.body.contains(el)) el.focus();
     }
 
     function renderNode(node, depth) {
         var doc = node.document;
         var el = document.createElement('div');
         el.className = 'tree-item' + (doc.id === currentDocId ? ' selected' : '');
+        el.dataset.id = doc.id;
+        el.setAttribute('role', 'treeitem');
+        el.setAttribute('aria-level', String(depth + 1));
+        el.setAttribute('aria-selected', doc.id === currentDocId ? 'true' : 'false');
+        el.tabIndex = -1;
         el.style.paddingLeft = (12 + depth * 20) + 'px';
 
         var isExpanded = expandedFolders.has(doc.id);
@@ -1086,12 +2031,14 @@
             : '<span class="tree-toggle invisible">\u25B6</span>';
 
         var statusBadge = '';
-        if (!doc.isFolder) {
-            if (doc.status === 'draft' && doc.driveFileId) {
-                statusBadge = '<span class="tree-badge badge-modified" title="Unpublished changes">Modified</span>';
-            } else if (doc.status === 'draft') {
-                statusBadge = '<span class="tree-badge badge-draft" title="Draft">Draft</span>';
-            }
+        if (doc.status === 'draft' && doc.driveFileId) {
+            statusBadge = doc.isFolder
+                ? '<span class="tree-badge badge-modified" title="Renamed on this PC only. Publish the folder to rename it on Drive.">Renamed</span>'
+                : '<span class="tree-badge badge-modified" title="Unpublished changes">Modified</span>';
+        } else if (doc.status === 'draft') {
+            statusBadge = doc.isFolder
+                ? '<span class="tree-badge badge-draft" title="Not on Drive yet. It is created there when you publish a page inside it.">Draft</span>'
+                : '<span class="tree-badge badge-draft" title="Draft">Draft</span>';
         }
         el.innerHTML = toggle + '<span class="tree-icon">' + icon + '</span><span class="tree-label">' + escapeHtml(doc.title || 'Untitled') + '</span>' + statusBadge;
 
@@ -1103,18 +2050,204 @@
             e.preventDefault(); e.stopPropagation();
             showContextMenu(e, doc);
         });
+        bindTreeDrag(el, doc);
 
         var container = document.createElement('div');
         container.className = 'tree-node';
         container.appendChild(el);
 
+        if (doc.isFolder) el.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
         if (doc.isFolder && isExpanded && node.children) {
             var childDiv = document.createElement('div');
             childDiv.className = 'tree-children';
+            childDiv.setAttribute('role', 'group');
             node.children.forEach(function (child) { childDiv.appendChild(renderNode(child, depth + 1)); });
             container.appendChild(childDiv);
         }
         return container;
+    }
+
+    // === Moving pages: drag and drop, and the Move to... picker ===
+    var dragId = null;
+
+    function bindTreeDrag(el, doc) {
+        el.draggable = true;
+        el.addEventListener('dragstart', function (e) {
+            dragId = doc.id;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('application/x-hexnote-doc', doc.id);
+            el.classList.add('dragging');
+        });
+        el.addEventListener('dragend', function () {
+            dragId = null;
+            clearDropMarks();
+        });
+        el.addEventListener('dragover', function (e) {
+            if (!dragId) return;
+            var zone = dropZone(e, el, doc);
+            clearDropMarks();
+            if (!zone) return;
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = 'move';
+            el.classList.add('drop-' + zone);
+        });
+        el.addEventListener('drop', function (e) {
+            if (!dragId) return;
+            var zone = dropZone(e, el, doc);
+            var id = dragId;
+            clearDropMarks();
+            if (!zone) return;
+            e.preventDefault();
+            e.stopPropagation();
+            dragId = null;
+            dropOn(id, doc, zone);
+        });
+    }
+
+    // dropZone decides what a drop at the pointer means: 'before' or 'after'
+    // the item (reorder among its siblings), or 'into' a folder (middle half).
+    // Returns null where the drop is not allowed.
+    function dropZone(e, el, target) {
+        if (target.id === dragId || isDescendant(target.id, dragId)) return null;
+        var r = el.getBoundingClientRect();
+        var y = (e.clientY - r.top) / Math.max(r.height, 1);
+        if (target.isFolder) return y < 0.25 ? 'before' : (y > 0.75 ? 'after' : 'into');
+        return y < 0.5 ? 'before' : 'after';
+    }
+
+    function clearDropMarks() {
+        document.querySelectorAll('.tree-item.drop-before, .tree-item.drop-after, .tree-item.drop-into, .tree-item.dragging')
+            .forEach(function (n) { n.classList.remove('drop-before', 'drop-after', 'drop-into', 'dragging'); });
+        document.getElementById('page-tree').classList.remove('drop-root');
+    }
+
+    function siblingsOf(parentId) {
+        var list = [];
+        if (!parentId) list = tree;
+        else (function walk(nodes) {
+            (nodes || []).forEach(function (n) {
+                if (n.document.id === parentId) list = n.children || [];
+                else walk(n.children);
+            });
+        })(tree);
+        return list.map(function (n) { return n.document; });
+    }
+
+    function dropOn(id, target, zone) {
+        var parentId, beforeId;
+        if (zone === 'into') {
+            parentId = target.id;
+            beforeId = '';
+        } else {
+            parentId = target.parentId || '';
+            beforeId = target.id;
+            if (zone === 'after') {
+                var sibs = siblingsOf(parentId);
+                var i = sibs.findIndex(function (d) { return d.id === target.id; });
+                beforeId = (i >= 0 && i + 1 < sibs.length) ? sibs[i + 1].id : '';
+                if (beforeId === id) return; // already right after target
+            }
+        }
+        moveDocument(id, parentId, beforeId);
+    }
+
+    async function moveDocument(id, parentId, beforeId) {
+        try {
+            var moved = await window.go.main.App.MoveDocumentTo(id, parentId, beforeId || '');
+            if (parentId) expandedFolders.add(parentId);
+            if (id === currentDocId && moved) setDocMeta(moved);
+            await loadTree();
+        } catch (e) {
+            showError('move', e);
+            await loadTree();
+        }
+    }
+
+    // openMovePicker lists the folders a page or folder can move into.
+    function openMovePicker(doc) {
+        var list = document.getElementById('move-list');
+        document.getElementById('move-title').textContent = 'Move \u201c' + doc.title + '\u201d to\u2026';
+        document.getElementById('move-hint').textContent = doc.driveFileId
+            ? 'It moves on Google Drive too, so teammates see it in the new folder.'
+            : 'It is not published, so it moves on this PC only.';
+        var options = [{ id: '', title: 'Top level of the workspace', depth: 0 }];
+        (function walk(nodes, depth) {
+            (nodes || []).forEach(function (n) {
+                var d = n.document;
+                if (!d.isFolder || d.id === doc.id) return;          // not into itself (or below it)
+                if (depth === 0 && d.title.toLowerCase() === 'assets') return;
+                options.push({ id: d.id, title: d.title, depth: depth + 1 });
+                walk(n.children, depth + 1);
+            });
+        })(tree, 0);
+
+        list.innerHTML = '';
+        options.forEach(function (o) {
+            var b = document.createElement('button');
+            b.className = 'move-option';
+            b.setAttribute('role', 'option');
+            b.style.paddingLeft = (12 + o.depth * 16) + 'px';
+            b.textContent = o.title;
+            var current = (doc.parentId || '') === o.id;
+            if (current) {
+                b.disabled = true;
+                b.textContent += ' (current)';
+            }
+            b.addEventListener('click', function () {
+                closeMovePicker();
+                moveDocument(doc.id, o.id, '');
+            });
+            list.appendChild(b);
+        });
+        document.getElementById('move-modal').classList.remove('hidden');
+        var first = list.querySelector('.move-option:not([disabled])');
+        (first || document.getElementById('btn-close-move')).focus();
+    }
+
+    function closeMovePicker() {
+        document.getElementById('move-modal').classList.add('hidden');
+    }
+
+    // startInlineRename turns a tree item's label into a text field.
+    // Enter or leaving the field commits; Esc cancels.
+    function startInlineRename(id) {
+        var item = document.querySelector('#page-tree .tree-item[data-id="' + cssEscape(id) + '"]');
+        var doc = findDoc(id);
+        if (!item || !doc) return;
+        var label = item.querySelector('.tree-label');
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'tree-rename-input';
+        input.value = doc.title;
+        input.setAttribute('aria-label', 'New name');
+        label.replaceWith(input);
+        input.focus();
+        input.select();
+
+        var done = false;
+        function finish(commit) {
+            if (done) return;
+            done = true;
+            var title = input.value.trim();
+            if (commit && title && title !== doc.title) {
+                renameDocument(doc, title);
+            } else {
+                renderTree();
+            }
+        }
+        input.addEventListener('keydown', function (e) {
+            e.stopPropagation();
+            if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+            else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        });
+        input.addEventListener('blur', function () { finish(true); });
+        input.addEventListener('click', function (e) { e.stopPropagation(); });
+        input.addEventListener('dblclick', function (e) { e.stopPropagation(); });
+    }
+
+    function cssEscape(s) {
+        return window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&');
     }
 
     function toggleFolder(id) {
@@ -1135,22 +2268,18 @@
         try {
             var doc = await window.go.main.App.GetDocument(id);
             document.getElementById('doc-title').value = doc.title;
-            lastKnownTitle = doc.title || '';
-            lastKnownContent = doc.content || '';
-            editor.commands.setContent(lastKnownContent);
+            loadEditorContent(doc.content);
+            // Compare future edits against the serializer's own output, not the
+            // raw file: TipTap's markdown round-trip is not byte-identical
+            // (blank lines after lists/tables, escaping), so comparing against
+            // doc.content would mark untouched pages as modified.
+            markClean(doc.title);
             document.getElementById('editor-container').classList.remove('hidden');
             document.getElementById('empty-state').classList.add('hidden');
             window.__hexnoteHasUnsaved = false;
             clearTimeout(saveTimeout);
-            setSaveStatus('Saved');
-            // Show publish button for draft documents
-            var publishBtn = document.getElementById('btn-publish');
-            if (doc.status === 'draft') {
-                publishBtn.style.display = '';
-                publishBtn.textContent = doc.driveFileId ? 'Publish Changes' : 'Publish';
-            } else {
-                publishBtn.style.display = 'none';
-            }
+            saveState = 'saved';
+            setDocMeta(doc);
             renderTree();
         } catch (e) { console.error('selectDocument error:', e); }
     }
@@ -1164,78 +2293,82 @@
             if (!isFolder) { await selectDocument(doc.id); document.getElementById('doc-title').select(); }
         } catch (e) {
             console.error('createDocument error:', e);
-            showToast('Error creating document', 'error');
+            showError(isFolder ? 'create the folder' : 'create the page', e);
         }
     }
 
-    function findTreeNode(nodes, id) {
-        for (var i = 0; i < (nodes || []).length; i++) {
-            if (nodes[i].document.id === id) return nodes[i];
-            var found = findTreeNode(nodes[i].children, id);
-            if (found) return found;
+    // findDoc returns the tree's copy of a document, or null.
+    function findDoc(id) {
+        var found = null;
+        (function walk(nodes) {
+            (nodes || []).forEach(function (n) {
+                if (found) return;
+                if (n.document.id === id) found = n.document;
+                else walk(n.children);
+            });
+        })(tree);
+        return found;
+    }
+
+    // confirmDelete asks before deleting and names what happens on Drive, so
+    // nobody is surprised that teammates lose the page too.
+    function confirmDelete(doc) {
+        if (!doc) return askConfirm('Delete this page?', '', 'Delete', true);
+        if (doc.isFolder) {
+            return askConfirm(
+                'Delete the folder "' + doc.title + '"?',
+                doc.driveFileId
+                    ? 'Everything in it is deleted from the workspace and the folder moves to the Drive trash. Teammates will no longer see it. The folder owner can restore it from Drive for 30 days.'
+                    : 'Everything in it is deleted. Published pages inside move to the Drive trash.',
+                'Delete folder', true);
         }
-        return null;
-    }
-
-    function subtreeHasPublished(node) {
-        if (node.document.driveFileId) return true;
-        return (node.children || []).some(subtreeHasPublished);
-    }
-
-    // The warning must match what the backend does: anything published goes to the
-    // Drive trash (recoverable, gone for collaborators); never-published drafts are
-    // deleted outright.
-    function deleteWarning(node) {
-        var doc = node.document;
-        var name = '"' + (doc.title || 'Untitled') + '"';
-        var hasChildren = doc.isFolder && node.children && node.children.length > 0;
-        var what = doc.isFolder ? 'folder ' + name + (hasChildren ? ' and everything inside it' : '') : name;
-        if (subtreeHasPublished(node)) {
-            return 'Delete ' + what + ' for everyone?\n\n' +
-                "Published pages will be moved to the Google Drive trash, where the folder's owner can restore them for 30 days. " +
-                'Collaborators will no longer see them.\n\n' +
-                'Edits on this computer that were never published cannot be recovered.';
+        if (doc.driveFileId) {
+            return askConfirm(
+                'Delete this page from the workspace and move its Drive file to trash?',
+                '"' + doc.title + '" disappears for teammates on their next refresh. The file owner can restore it from the Drive trash for 30 days.',
+                'Delete and trash', true);
         }
-        return 'Delete ' + what + '?\n\nIt has never been published, so it cannot be recovered.';
+        return askConfirm('Delete this draft?', '"' + doc.title + '" only exists on this PC, so it cannot be recovered.', 'Delete draft', true);
     }
 
-    async function deleteDoc(id) {
-        var node = findTreeNode(tree, id);
-        if (!node) return;
-        if (!confirm(deleteWarning(node))) return;
+    // deleteDocument deletes a page or folder after confirmation.
+    async function deleteDocument(doc) {
+        if (!(await confirmDelete(doc))) return;
         try {
-            await window.go.main.App.DeleteDocument(id);
-            // The open page may be the deleted item or inside a deleted folder
-            if (currentDocId && (currentDocId === id || findTreeNode(node.children, currentDocId))) {
+            await window.go.main.App.DeleteDocument(doc.id);
+            if (currentDocId === doc.id || (currentDocId && isDescendant(currentDocId, doc.id))) {
                 currentDocId = null;
                 window.__hexnoteHasUnsaved = false;
-                clearTimeout(saveTimeout);
                 document.getElementById('editor-container').classList.add('hidden');
             }
             await loadTree();
             updateEmptyState();
             showToast('Deleted', 'info');
         } catch (e) {
-            console.error('deleteDoc error:', e);
-            showToast("Couldn't delete: " + (e.message || e), 'error', 8000);
+            console.error('deleteDocument error:', e);
+            showError('delete', e);
         }
+    }
+
+    // isDescendant reports whether id sits somewhere below ancestorId.
+    function isDescendant(id, ancestorId) {
+        var d = findDoc(id);
+        while (d && d.parentId) {
+            if (d.parentId === ancestorId) return true;
+            d = findDoc(d.parentId);
+        }
+        return false;
     }
 
     async function deleteCurrentDoc() {
         if (!currentDocId) return;
-        await deleteDoc(currentDocId);
+        await deleteDocument(findDoc(currentDocId) || { id: currentDocId, title: '' });
     }
 
     function onEditorChange() {
         if (!currentDocId) return;
         window.__hexnoteHasUnsaved = true;
-        setSaveStatus('Unsaved');
-        // Show publish button immediately on first edit — don't wait for save
-        var publishBtn = document.getElementById('btn-publish');
-        if (publishBtn && publishBtn.style.display === 'none') {
-            publishBtn.style.display = '';
-            publishBtn.textContent = 'Publish Changes';
-        }
+        setSaveStatus('unsaved');
         clearTimeout(saveTimeout);
         saveTimeout = setTimeout(saveNow, autoSaveDelay);
     }
@@ -1243,49 +2376,128 @@
     function onTitleChange() {
         if (!currentDocId) return;
         window.__hexnoteHasUnsaved = true;
-        setSaveStatus('Unsaved');
+        setSaveStatus('unsaved');
         clearTimeout(saveTimeout);
         saveTimeout = setTimeout(saveNow, autoSaveDelay);
+    }
+
+    // loadEditorContent shows a page's markdown with a fresh undo history.
+    // Without the reset, Ctrl+Z right after opening a page undid the load
+    // itself (emptying the page, which autosave then stored) and could replay
+    // edits from the previously open page.
+    function loadEditorContent(markdown) {
+        editor.commands.setContent(markdown || '', { emitUpdate: false });
+        var st = editor.state;
+        editor.view.updateState(st.constructor.create({ schema: st.schema, doc: st.doc, plugins: st.plugins }));
+        refreshToolbar(); // updateState fires no transaction, so the toolbar would not notice
+    }
+
+    // editorMarkdown returns the editor content as markdown with a single
+    // trailing newline, the conventional ending for a text file on Drive.
+    function editorMarkdown() {
+        var md = editor.storage.markdown.getMarkdown();
+        if (md && md.charAt(md.length - 1) !== '\n') md += '\n';
+        return md;
+    }
+
+    // markClean records the editor's current state as saved.
+    function markClean(title) {
+        lastKnownContent = editorMarkdown();
+        lastKnownTitle = title;
+        window.__hexnoteHasUnsaved = false;
     }
 
     async function saveNow() {
         if (!currentDocId) return;
         clearTimeout(saveTimeout);
         var title = document.getElementById('doc-title').value.trim() || 'Untitled';
-        var content = editor.storage.markdown.getMarkdown();
-        // Skip the save if neither title nor content changed from what we loaded/last saved.
-        // This prevents auto-save from re-dirtying a document that was just updated by sync.
-        if (content.trim() === lastKnownContent.trim() && title === lastKnownTitle) {
+        var content = editorMarkdown();
+        // Skip the save only if neither the body nor the title changed since
+        // the last load/save. This keeps auto-save from re-dirtying a document
+        // that was just updated by sync, without dropping title-only edits.
+        if (content === lastKnownContent && title === lastKnownTitle) {
             window.__hexnoteHasUnsaved = false;
-            setSaveStatus('Saved');
+            setSaveStatus('saved');
             return;
         }
-        setSaveStatus('Saving...');
+        setSaveStatus('saving');
         try {
-            var doc = await window.go.main.App.UpdateDocument(currentDocId, title, content);
+            var savedId = currentDocId;
+            var doc = await window.go.main.App.UpdateDocument(savedId, title, content);
+            if (savedId !== currentDocId) { await loadTree(); return; }
             lastKnownContent = content;
             lastKnownTitle = title;
-            window.__hexnoteHasUnsaved = false;
-            setSaveStatus('Saved');
-            // Editing sets status to 'draft' — show the Publish button
-            var publishBtn = document.getElementById('btn-publish');
-            if (doc && doc.status === 'draft') {
-                publishBtn.style.display = '';
-                publishBtn.textContent = doc.driveFileId ? 'Publish Changes' : 'Publish';
+            if (doc) currentDocMeta = docMeta(doc);
+            // The user may have kept typing while the save was in flight.
+            var titleNow = document.getElementById('doc-title').value.trim() || 'Untitled';
+            if (editorMarkdown() === content && titleNow === title) {
+                window.__hexnoteHasUnsaved = false;
+                setSaveStatus('saved');
+            } else {
+                setSaveStatus('unsaved');
+                clearTimeout(saveTimeout);
+                saveTimeout = setTimeout(saveNow, autoSaveDelay);
             }
             await loadTree();
-        } catch (e) { console.error('save error:', e); setSaveStatus('Error'); }
+        } catch (e) { console.error('save error:', errorMessage(e)); setSaveStatus('error'); }
     }
 
-    function setSaveStatus(text) {
+    function setSaveStatus(state) {
+        saveState = state;
+        renderDocStatus();
+    }
+
+    // setDocMeta records the open page's publish state and redraws the header.
+    function setDocMeta(doc) {
+        currentDocMeta = doc ? docMeta(doc) : null;
+        renderDocStatus();
+    }
+
+    function docMeta(doc) {
+        return { status: doc.status, driveFileId: doc.driveFileId || '', driveModifiedAt: doc.driveModifiedAt || '' };
+    }
+
+    // renderDocStatus draws the one status line that says where the open page
+    // lives, and shows the Publish button when there is something to publish.
+    //   Saved on this PC · not published   (draft, never published)
+    //   Published · edits not published    (published before, local changes since)
+    //   Published · up to date             (Drive has exactly this)
+    //   Saving… / Unsaved changes / Couldn't save
+    function renderDocStatus() {
         var el = document.getElementById('save-status');
+        var btn = document.getElementById('btn-publish');
+        var meta = currentDocMeta || { status: 'draft', driveFileId: '' };
+        var onDrive = !!meta.driveFileId;
+        var pendingEdits = saveState === 'unsaved' || saveState === 'saving';
+        var needsPublish = meta.status === 'draft' || pendingEdits;
+        var text, cls, tip;
+
+        if (saveState === 'saving') {
+            text = 'Saving\u2026'; cls = 'saving'; tip = 'Saving on this PC';
+        } else if (saveState === 'unsaved') {
+            text = 'Unsaved changes'; cls = 'unsaved'; tip = 'Saved on this PC automatically in a moment (Ctrl+S saves now)';
+        } else if (saveState === 'error') {
+            text = 'Couldn\u2019t save'; cls = 'error'; tip = 'Saving on this PC failed. Your text is still in the editor; press Ctrl+S to try again.';
+        } else if (!onDrive) {
+            text = 'Saved on this PC \u00b7 not published'; cls = 'draft';
+            tip = 'Only you can see this page. Publish puts it on Google Drive for your team.';
+        } else if (meta.status === 'draft') {
+            text = 'Published \u00b7 edits not published'; cls = 'modified';
+            tip = 'Teammates see the last published version. Publish Changes sends your edits to Google Drive.';
+        } else {
+            text = 'Published \u00b7 up to date'; cls = 'published';
+            tip = 'Google Drive has this version. Teammates see it when they refresh.';
+        }
         el.textContent = text;
-        var cls = 'save-status';
-        if (text === 'Saved') cls += ' saved';
-        else if (text === 'Error') cls += ' error';
-        else if (text === 'Saving...') cls += ' saving';
-        else if (text === 'Unsaved') cls += ' unsaved';
-        el.className = cls;
+        el.title = tip;
+        el.className = 'save-status ' + cls;
+
+        btn.style.display = needsPublish ? '' : 'none';
+        if (!btn.disabled) btn.textContent = onDrive ? 'Publish Changes' : 'Publish';
+        btn.title = onDrive ? 'Send your edits to Google Drive (Ctrl+Shift+P)' : 'Put this page on Google Drive for your team (Ctrl+Shift+P)';
+
+        // One-time hint explaining drafts, shown on unpublished pages until dismissed.
+        document.getElementById('draft-hint').classList.toggle('hidden', draftHintDismissed || onDrive || !currentDocId);
     }
 
     async function doSearch() {
@@ -1314,9 +2526,10 @@
     }
 
     var contextTarget = null;
-    function showContextMenu(e, doc) {
+    function showContextMenu(e, doc, fromKeyboard) {
         contextTarget = doc;
         var menu = document.getElementById('context-menu');
+        menuReturnFocus = fromKeyboard ? document.activeElement : null;
         menu.style.top = e.clientY + 'px';
         menu.style.left = e.clientX + 'px';
         menu.classList.remove('hidden');
@@ -1329,14 +2542,23 @@
         menu.querySelector('[data-action="new-folder"]').style.display = '';
         // Rename/Delete: only show on actual items, not root
         menu.querySelector('[data-action="rename"]').style.display = isRoot ? 'none' : '';
+        menu.querySelector('[data-action="move"]').style.display = isRoot ? 'none' : '';
+        // Publish: drafts only (a renamed folder is a draft until its name reaches Drive)
+        var publishItem = menu.querySelector('[data-action="publish"]');
+        var canPublish = !isRoot && doc.status === 'draft';
+        publishItem.style.display = canPublish ? '' : 'none';
+        publishItem.textContent = (isFolder && doc.driveFileId) ? 'Publish rename' : (doc && doc.driveFileId ? 'Publish changes' : 'Publish');
+        keepMenuOnScreen(menu);
+        if (fromKeyboard) focusMenu(menu);
         menu.querySelector('[data-action="delete"]').style.display = isRoot ? 'none' : '';
         // Hide the separator if only showing new-page/new-folder
         menu.querySelector('hr').style.display = isRoot ? 'none' : '';
     }
 
     async function onContextAction(e) {
-        var action = e.target.dataset.action;
+        var action = e.target.closest('button').dataset.action;
         document.getElementById('context-menu').classList.add('hidden');
+        restoreMenuFocus();
         // Determine where to create: inside a folder, as sibling of a file, or at root
         var newParentId = '';
         if (contextTarget) {
@@ -1347,26 +2569,71 @@
             case 'new-folder': await createDocument(newParentId, true); break;
             case 'rename':
                 if (!contextTarget) break;
-                var newTitle = prompt('Rename:', contextTarget.title);
-                if (newTitle && newTitle.trim()) {
-                    await window.go.main.App.UpdateDocument(contextTarget.id, newTitle.trim(), contextTarget.content || '');
-                    if (currentDocId === contextTarget.id) {
-                        document.getElementById('doc-title').value = newTitle.trim();
-                        lastKnownTitle = newTitle.trim();
-                    }
-                    await loadTree();
-                }
+                startInlineRename(contextTarget.id);
+                break;
+            case 'publish':
+                if (!contextTarget) break;
+                await publishDocument(contextTarget.id);
+                break;
+            case 'move':
+                if (!contextTarget) break;
+                openMovePicker(contextTarget);
                 break;
             case 'delete':
                 if (!contextTarget) break;
-                await deleteDoc(contextTarget.id);
+                await deleteDocument(contextTarget);
                 break;
         }
         contextTarget = null;
     }
 
     // === Global Event Binding ===
+    // Dialog focus: when a modal opens, focus moves into it (and Tab stays
+    // inside); when it closes, focus returns to where it was. Watching the
+    // class attribute covers every place that shows or hides a modal.
+    function bindModalFocus() {
+        var returnTo = {};
+        document.querySelectorAll('.modal-overlay').forEach(function (m) {
+            if (m.id === 'confirm-sheet') return; // manages its own focus
+            new MutationObserver(function () {
+                var open = !m.classList.contains('hidden');
+                if (open && !returnTo[m.id]) {
+                    returnTo[m.id] = document.activeElement || document.body;
+                    setTimeout(function () {
+                        if (m.contains(document.activeElement)) return; // the opener already focused something
+                        var f = focusables(m);
+                        var target = f.filter(function (el) { return !el.closest('.modal-header'); })[0] || f[0];
+                        if (target) target.focus();
+                    }, 0);
+                } else if (!open && returnTo[m.id]) {
+                    var el = returnTo[m.id];
+                    delete returnTo[m.id];
+                    if (el && document.body.contains(el) && el.focus) el.focus();
+                }
+            }).observe(m, { attributes: true, attributeFilter: ['class'] });
+        });
+        document.addEventListener('keydown', function (e) {
+            if (e.key !== 'Tab') return;
+            var open = Array.prototype.slice.call(document.querySelectorAll('.modal-overlay:not(.hidden)'));
+            var top = open.filter(function (m) { return m.id === 'confirm-sheet'; })[0] || open[open.length - 1];
+            if (!top) return;
+            var f = focusables(top);
+            if (!f.length) return;
+            var first = f[0], last = f[f.length - 1];
+            if (!top.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+            else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+        });
+    }
+
+    function focusables(root) {
+        return Array.prototype.slice.call(root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+            .filter(function (el) { return !el.disabled && el.offsetParent !== null; });
+    }
+
     function bindGlobalEvents() {
+        bindSheetEvents();
+        bindModalFocus();
         bindCredentialsEvents();
         bindSigninEvents();
         bindPathChoiceEvents();
@@ -1387,9 +2654,14 @@
         });
     }
 
+    // escapeHtml makes text safe for element content and for quoted
+    // attribute values (it escapes both kinds of quote).
     function escapeHtml(str) {
-        var d = document.createElement('div');
-        d.textContent = str;
-        return d.innerHTML;
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 })();
